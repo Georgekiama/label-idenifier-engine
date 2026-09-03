@@ -43,7 +43,7 @@ Output: one JSON per PDF.
   "document_id": "<sha256[:16]>",
   "filename": "<name.pdf>",
   "total_pages": <int>,
-  "census_version": "1.4.0",
+  "census_version": "1.5.0",
   "bates_series": [{"prefix": "ABC", "digits": 6, "first": 1, "last": 240,
                     "pages": [1, 2, ...], "page_count": 240}],
   "pages": [
@@ -62,6 +62,7 @@ Output: one JSON per PDF.
       "is_blank": false, "is_spacer": false, "is_slip_sheet": false,
       "header_sig": "jsc-##### page ##", "footer_sig": "...",
       "ends_mid_sentence": true, "starts_lowercase": false,
+      "content_tokens": ["deposition", "plaintiff", "transcript", ...],
       "text_head": "<first 160 chars, whitespace-normalised>",
       "text_sha": "<sha1[:12] of normalised full page text>"
     }, ...
@@ -87,7 +88,7 @@ except ImportError:
     print("ERROR: PyMuPDF is required. Install with: pip install pymupdf", file=sys.stderr)
     raise
 
-CENSUS_VERSION = "1.4.0"
+CENSUS_VERSION = "1.5.0"
 
 # --- Pattern library (versioned by CENSUS_VERSION) --------------------------
 
@@ -156,13 +157,33 @@ DIGIT_MASK_RE = re.compile(r"\d")
 # Text that ends without terminal punctuation is mid-sentence.
 TERMINAL_PUNCT = ".!?:;”’\")]}"
 
+# Content-token fingerprint. Consecutive pages of one document share subject
+# vocabulary - the same names, terms and jargon. Across a document boundary that
+# vocabulary turns over. This is the ONLY signal that survives a same-producer
+# Bates production, where fonts, page size, modality and the stamp run are all
+# continuous and nothing structural changes at the seam except the words.
+#
+# It is a set-overlap measurement over normalised tokens, not text understanding:
+# no semantics, no model, no ordering.
+TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]{3,}")
+TOKEN_CAP = 60          # keep the N most frequent; caps census size and cost
+MIN_TOKEN_LEN = 4
+STOPWORDS = frozenset("""
+that this with from have been were will would could should their there these
+those which what when where than then them they your yours about above after
+again against because before being below between both during each further here
+itself more most other over same some such only once under until very
+shall must may can any all not but for and the are was has had its his her
+page section chapter table figure appendix exhibit paragraph
+""".split())
+
 REQUIRED_PAGE_FIELDS = [
     "page", "width", "height", "rotation", "size_class", "orientation",
     "modality", "char_count", "word_count",
     "line_count", "image_count", "font_families", "font_classes", "bates",
     "page_label", "is_blank", "is_spacer", "is_slip_sheet", "header_sig",
-    "footer_sig", "ends_mid_sentence", "starts_lowercase", "text_head",
-    "text_sha", "bates_in_series",
+    "footer_sig", "ends_mid_sentence", "starts_lowercase", "content_tokens",
+    "text_head", "text_sha", "bates_in_series",
 ]
 REQUIRED_DOC_FIELDS = [
     "document_id", "filename", "total_pages", "census_version", "bates_series", "pages",
@@ -237,6 +258,30 @@ def edge_signature(raw_text: str):
         return DIGIT_MASK_RE.sub("#", s.lower())[:EDGE_SIG_LEN]
 
     return sig(lines[0]), sig(lines[-1])
+
+
+def content_tokens(text: str):
+    """Deterministic content-word fingerprint for one page.
+
+    Lowercased alphabetic tokens of 4+ characters, stopwords removed, kept as
+    the TOKEN_CAP most frequent. Ties break alphabetically so the output is
+    stable regardless of dict ordering, and the list is sorted so two censuses
+    of the same page are byte-identical.
+
+    Structural words ("page", "section", "exhibit") are treated as stopwords:
+    they recur across unrelated documents and would inflate the overlap between
+    two pages that share nothing but a template.
+    """
+    counts = {}
+    for m in TOKEN_RE.finditer(text):
+        w = m.group(0).lower()
+        if len(w) < MIN_TOKEN_LEN or w in STOPWORDS:
+            continue
+        counts[w] = counts.get(w, 0) + 1
+    if not counts:
+        return []
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return sorted(w for w, _ in ranked[:TOKEN_CAP])
 
 
 def classify_page_size(width: float, height: float, rotation: int):
@@ -333,6 +378,7 @@ def census_page(page, page_number: int) -> dict:
         "footer_sig": footer_sig,
         "ends_mid_sentence": bool(stripped) and stripped[-1] not in TERMINAL_PUNCT,
         "starts_lowercase": first_alpha.islower(),
+        "content_tokens": content_tokens(norm),
         "text_head": norm[:160],
         "text_sha": hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12],
     }

@@ -1,0 +1,124 @@
+# ExhibitPro - Stage 0.5 segmentation contract
+#
+# THIS FILE IS THE OWNED ARTEFACT. The engine holds logic; every tunable number
+# lives here, where it can be reviewed, diffed, and versioned like the decision
+# it actually is.
+#
+# Changing ANY value in this file changes labels the engine has already produced.
+# You must bump `version` when you do. tests/test_contracts.py hashes this
+# directory and fails the build if the content moved without the version moving,
+# so the guarantee is enforced by CI rather than by memory.
+
+version: "SEG-1.0.0"
+
+# --- Signal weights ---------------------------------------------------------
+# Positive weights are CHANGE evidence (this is a new document).
+# Negative weights are CONTINUITY evidence (these pages belong together).
+weights:
+  # DECISIVE - sufficient alone at the balanced policy
+  slip_sheet_ahead:           1.60   # next page is a near-empty divider
+  bates_prefix_change:        1.60   # production prefix changes: ABC -> XYZ
+
+  # STRONG - a cut requires at least one of these
+  modality_flip:              1.00   # native <-> scanned
+  page_size_change:           1.00   # Letter -> Legal -> Ledger
+  page_label_restart:         1.00   # "Page 7 of 9" then "Page 1 of 40"
+  font_family_change:         1.00   # page font resources diverge
+
+  # MEDIUM - corroborating only
+  rotation_change:            0.80
+  bates_number_gap:           0.70   # same prefix, non-consecutive
+  font_size_change:           0.60   # Tier B only
+
+  # WEAK
+  blank_page:                 0.40
+
+  # REVIEW-ONLY - see review_only_signals below
+  vocabulary_change:          0.70
+  running_header_change:      0.70
+
+  # CONTINUITY
+  slip_sheet_behind:         -1.60   # a divider belongs to the doc it opens
+  running_header_match:      -1.20
+  running_header_alternates: -1.20   # recto/verso alternation
+  page_label_continues:      -1.20
+  bates_consecutive:         -1.20
+  sentence_continuation:     -1.00
+  running_footer_match:      -0.80
+
+# Signals admitted as evidence for LOOKING, never as evidence for ACTING.
+#
+# Both describe content drift rather than structure, and content drifts inside a
+# single document constantly. Measured: vocabulary_change lifts hard-seam review
+# coverage from 0.50 to 0.96 - the most valuable single thing in the model - but
+# allowed into the cut decision it tips one lone strong signal over the
+# threshold, and caused 3 of 5 false cuts on single-document controls.
+review_only_signals:
+  - vocabulary_change
+  - running_header_change
+
+# --- Granularity policy -----------------------------------------------------
+#
+# This is a PRODUCT decision, not an engineering constant, and it is why the
+# threshold is named rather than hardcoded. Whether "Section I / Section II /
+# Appendices" of one report is four binder tabs or one depends on the firm and
+# on the matter. The two fixture sets genuinely disagree about the best value,
+# because they represent different intake shapes - which is the point.
+#
+# Measured on goldens/realistic (44 fixtures, 102 seams, 10 negative controls)
+# and goldens/fixtures (40 fixtures, 135 seams):
+#
+#   policy         realistic                              naive
+#                  prec   rec    assist  falseCut/doc     prec   rec    assist
+#   conservative   0.932  0.539  0.990   0.00             0.973  0.267  0.978
+#   balanced       0.789  0.549  0.863   0.20             0.952  0.444  0.978
+#   aggressive     0.738  0.608  0.843   0.50             0.950  0.563  0.889
+#
+# assisted recall - real boundaries either cut OR queued for review - stays
+# between 0.84 and 0.99 across the whole range. The dial therefore trades
+# AUTOMATION against REVIEW WORKLOAD, not accuracy against inaccuracy.
+policies:
+  conservative:
+    boundary_threshold: 1.80
+    description: >
+      Cuts only on strongly corroborated evidence. Zero false cuts on real
+      single documents in testing. Largest review queue. Choose this when a
+      mis-split binder is expensive and reviewer time is not.
+  balanced:
+    boundary_threshold: 1.50
+    description: >
+      Default. A decisive signal alone cuts; a lone strong signal does not.
+  aggressive:
+    boundary_threshold: 1.00
+    description: >
+      A single strong signal cuts. Highest automation, and roughly one false
+      cut for every two single documents. Choose only with reviewer sampling.
+
+default_policy: balanced
+
+# --- Thresholds -------------------------------------------------------------
+thresholds:
+  # Change evidence at or above this surfaces a seam for human review, even when
+  # continuity outweighs it. Continuity decides whether we CUT; it must never
+  # decide whether a seam is SEEN.
+  candidate_floor: 0.70
+  # A cut requires at least one change signal individually this strong, so soft
+  # evidence cannot accumulate into a boundary.
+  strong_signal_min: 1.00
+  # Font family sets differ below this overlap coefficient (NOT Jaccard - a font
+  # subset is continuity, not divergence).
+  font_overlap_min: 0.50
+  # Char-weighted font size histograms differ above this L1 distance (0-2).
+  font_size_l1_min: 0.60
+  # Relative dimension tolerance, used only when both pages are size_class other.
+  other_size_tolerance: 0.05
+  # A seam fires vocabulary_change when overlap falls to this fraction of the
+  # document's own median adjacent-page overlap.
+  vocab_drop_ratio: 0.45
+  # Guards: too little text to compare, too few pairs to establish a median.
+  min_vocab_tokens: 8
+  min_vocab_pairs: 4
+  # An interior segment this short, flanked by matching pages, is an insert.
+  max_insert_pages: 2
+  # Head pages handed to Stage 1 per segment.
+  head_page_count: 2

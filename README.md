@@ -51,29 +51,60 @@ python tools/make_realistic_fixtures.py --corpus "<pdfs>" --output goldens/reali
 python tools/evaluate_segmentation.py --fixtures goldens/realistic --baseline goldens/baseline_realistic.json --check
 ```
 
-Current baselines:
+Current baselines (policy `balanced`):
 
 | metric | naive | realistic |
 |---|---|---|
-| precision | 0.950 | 0.792 |
-| recall | 0.563 | 0.559 |
-| f1 | 0.707 | 0.655 |
-| assisted_recall | 0.889 | 0.726 |
+| precision | 0.952 | 0.789 |
+| recall | 0.444 | 0.549 |
+| **assisted_recall** | **0.978** | **0.863** |
 
-Recall by seam difficulty on the realistic set is the number that matters:
+Recall by seam difficulty on the realistic set:
 
 | difficulty | cut | reaching a human |
 |---|---|---|
 | easy (slip sheets) | 0.684 | 0.684 |
-| medium (producer change) | 0.722 | **0.944** |
-| hard (continuous Bates run) | 0.179 | **0.500** |
+| medium (producer change) | 0.694 | 0.972 |
+| hard (continuous Bates run) | 0.179 | **0.964** |
 
-**Hard seams are the open problem.** In a continuous Bates production the real
-boundaries carry no structural change at all, so they cannot be cut on evidence
-the engine can see. What is enforced instead is that they are never lost
-*silently*: continuity evidence decides whether we CUT, never whether a seam is
-SEEN. Half of them now reach the review queue; before that rule they reached
-nobody.
+**assisted_recall is the number to read.** In a continuous Bates production the
+real boundaries carry no structural change at all, so they cannot be cut on
+evidence the engine can see - but they are never lost silently. Continuity
+evidence decides whether we CUT; it never decides whether a seam is SEEN.
+
+## Granularity policy
+
+Whether "Section I / Section II / Appendices" of one report is four binder tabs
+or one is a product decision, not a constant, so it is named rather than
+hardcoded:
+
+```
+python segmenter.py --census census_json --output segments_json --policy conservative
+```
+
+| policy | threshold | realistic precision | assisted_recall | false cuts per single document |
+|---|---|---|---|---|
+| conservative | 1.80 | 0.932 | 0.990 | 0.00 |
+| balanced (default) | 1.50 | 0.789 | 0.863 | 0.20 |
+| aggressive | 1.00 | 0.738 | 0.843 | 0.50 |
+
+assisted_recall stays between 0.84 and 0.99 across the whole range, so the dial
+trades **automation against review workload**, not accuracy against inaccuracy.
+
+## Contracts: where the tunables are owned
+
+Every weight, threshold and policy lives in `contracts/segmentation.yaml`, not
+in Python. A contract's `version` must move whenever its content moves, or two
+runs of the same declared version can disagree and the audit ledger becomes a
+liar. That is enforced mechanically:
+
+```
+python tools/verify_contracts.py            # exit 1 on drift
+python tools/verify_contracts.py --update   # after a deliberate version bump
+```
+
+Every segment map stamps `contract_versions` and the active `policy`, so any
+label can be traced to the exact configuration that produced it.
 
 Negative controls hold at 0.20 false cuts per single document.
 

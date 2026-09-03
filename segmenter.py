@@ -31,14 +31,12 @@ independent signals. Signals are weighted by how much they alone justify a cut:
     page_label_restart      1.00  "Page 7 of 9" then "Page 1 of 40"
     font_family_change      1.00  page resource fingerprint diverges
 
+  REVIEW-ONLY (raise a seam for human review; never contribute to a cut)
+    vocabulary_change       0.70
+    running_header_change   0.70
+
   MEDIUM
     rotation_change         0.80
-    running_header_change   0.70  an established running header changes.
-                                  Deliberately MEDIUM, not STRONG: a report's
-                                  own section headers change too, so this can
-                                  surface a seam for review but must never cut
-                                  on its own. At 1.00 it raised false cuts on
-                                  single-document controls from 0.2 to 1.6 each.
     bates_number_gap        0.70  same prefix, non-consecutive numbering
 
   WEAK
@@ -53,7 +51,9 @@ independent signals. Signals are weighted by how much they alone justify a cut:
     sentence_continuation  -1.00  prose runs across the break
     running_footer_match   -0.80  same footer template
 
-A CUT requires (CHANGE minus CONTINUITY) >= threshold. A CANDIDATE for human
+A CUT requires (CHANGE minus CONTINUITY) >= threshold AND at least one
+individually STRONG change signal, so soft evidence cannot accumulate into a
+boundary. A CANDIDATE for human
 review requires CHANGE alone >= floor, ignoring continuity entirely - so a
 production-wide Bates run can stop the engine cutting, but can never stop a
 changed seam reaching a person.
@@ -125,48 +125,55 @@ import sys
 import time
 from pathlib import Path
 
-SEGMENTER_VERSION = "1.4.0"
+SEGMENTER_VERSION = "1.6.0"
 
-# --- Tunable model (stamped into every output; bump version if changed) -----
+# --- Model, loaded from the versioned contract ------------------------------
+#
+# Nothing tunable is defined in this file. Every weight, threshold and policy
+# lives in contracts/segmentation.yaml, is stamped into each output, and is
+# guarded by a content-hash test so it cannot change without its version
+# changing. See contracts/loader.py for the rule and the workflow.
 
-WEIGHTS = {
-    "slip_sheet_ahead": 1.60,
-    "bates_prefix_change": 1.60,
-    "modality_flip": 1.00,
-    "page_size_change": 1.00,
-    "page_label_restart": 1.00,
-    "font_family_change": 1.00,
-    "running_header_change": 0.70,
-    "rotation_change": 0.80,
-    "bates_number_gap": 0.70,
-    "font_size_change": 0.60,   # Tier B only
-    "blank_page": 0.40,
-    # Continuity: negative weights, subtracted from the change score.
-    "running_header_match": -1.20,
-    "running_header_alternates": -1.20,
-    "slip_sheet_behind": -1.60,
-    "running_footer_match": -0.80,
-    "page_label_continues": -1.20,
-    "bates_consecutive": -1.20,
-    "sentence_continuation": -1.00,
-}
-BOUNDARY_THRESHOLD = 1.50
-# Scores in this band are ambiguous enough that Tier B may change the outcome.
-REFINE_BAND = (0.70, BOUNDARY_THRESHOLD)
-# Anything at or above this, but below threshold, is reported for human review.
-CANDIDATE_FLOOR = 0.70
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from contracts import loader as _contracts  # noqa: E402
 
-# Relative tolerance used only when both pages are size_class "other".
-OTHER_SIZE_TOLERANCE = 0.05
-# Font family sets are "different" below this overlap coefficient.
-FONT_OVERLAP_MIN = 0.50
-# Char-weighted font size histograms are "different" above this L1 distance
-# (range 0-2; 0 identical, 2 disjoint).
-FONT_SIZE_L1_MIN = 0.60
-# A head is the segment's first page plus the next, mirroring Stage 1's pages 1-2.
-HEAD_PAGE_COUNT = 2
-# An interior segment this short, flanked by matching pages, is an insert.
-MAX_INSERT_PAGES = 2
+_SEG = _contracts.load("segmentation")
+
+WEIGHTS = dict(_SEG["weights"])
+REVIEW_ONLY_SIGNALS = frozenset(_SEG["review_only_signals"])
+POLICIES = _SEG["policies"]
+DEFAULT_POLICY = _SEG["default_policy"]
+
+_T = _SEG["thresholds"]
+CANDIDATE_FLOOR = _T["candidate_floor"]
+STRONG_SIGNAL_MIN = _T["strong_signal_min"]
+FONT_OVERLAP_MIN = _T["font_overlap_min"]
+FONT_SIZE_L1_MIN = _T["font_size_l1_min"]
+OTHER_SIZE_TOLERANCE = _T["other_size_tolerance"]
+VOCAB_DROP_RATIO = _T["vocab_drop_ratio"]
+MIN_VOCAB_TOKENS = _T["min_vocab_tokens"]
+MIN_VOCAB_PAIRS = _T["min_vocab_pairs"]
+MAX_INSERT_PAGES = _T["max_insert_pages"]
+HEAD_PAGE_COUNT = _T["head_page_count"]
+
+BOUNDARY_THRESHOLD = POLICIES[DEFAULT_POLICY]["boundary_threshold"]
+ACTIVE_POLICY = DEFAULT_POLICY
+
+
+def set_policy(name):
+    """Select a granularity policy by name. Returns its boundary threshold."""
+    global BOUNDARY_THRESHOLD, ACTIVE_POLICY, REFINE_BAND
+    if name not in POLICIES:
+        raise ValueError(f"unknown policy {name!r}; choose from {sorted(POLICIES)}")
+    ACTIVE_POLICY = name
+    BOUNDARY_THRESHOLD = POLICIES[name]["boundary_threshold"]
+    REFINE_BAND = (CANDIDATE_FLOOR, BOUNDARY_THRESHOLD)
+    return BOUNDARY_THRESHOLD
+
+
+# Seams in this band are ambiguous enough that Tier B may change the outcome.
+REFINE_BAND = (CANDIDATE_FLOOR, BOUNDARY_THRESHOLD)
+
 # Safety bound on the re-join fixed-point loop.
 MAX_REJOIN_PASSES = 50
 # Console report only; does not affect output files.
@@ -180,6 +187,12 @@ REQUIRED_SEGMENT_FIELDS = [
     "index", "start_page", "end_page", "page_count", "head_pages",
     "opened_by", "boundary_score", "signals", "reabsorbed_inserts",
 ]
+
+
+def make_signal(name, detail=None):
+    """Build one scored signal. The single place a weight is attached to a name,
+    so Tier B refinement and the main scoring pass cannot drift apart."""
+    return {"name": name, "weight": WEIGHTS[name], "detail": detail or {}}
 
 
 def font_overlap(a, b) -> float:
@@ -217,7 +230,38 @@ def size_changed(p, q) -> bool:
     return pc != qc
 
 
-def score_boundary(pages, i) -> list:
+def vocabulary_overlap(a, b) -> float:
+    """Overlap coefficient between two pages' content-token fingerprints."""
+    sa, sb = set(a or ()), set(b or ())
+    if len(sa) < MIN_VOCAB_TOKENS or len(sb) < MIN_VOCAB_TOKENS:
+        return None          # too little text to judge; absence of evidence
+    return len(sa & sb) / min(len(sa), len(sb))
+
+
+def vocabulary_baseline(pages):
+    """Median adjacent-page vocabulary overlap for THIS document.
+
+    The threshold has to be relative. A dense technical report shares far more
+    vocabulary page-to-page than a bundle of one-page correspondence, so a fixed
+    cutoff would either miss every seam in the first or split every page of the
+    second. Comparing each seam against the document's own median asks the right
+    question: is this drop unusual *here*?
+
+    Returns None when there is too little comparable text to establish a norm,
+    in which case the signal simply does not fire.
+    """
+    vals = []
+    for i in range(len(pages) - 1):
+        ov = vocabulary_overlap(pages[i].get("content_tokens"),
+                                pages[i + 1].get("content_tokens"))
+        if ov is not None:
+            vals.append(ov)
+    if len(vals) < MIN_VOCAB_PAIRS:
+        return None
+    return statistics.median(vals)
+
+
+def score_boundary(pages, i, vocab_median=None) -> list:
     """Score the seam between pages[i] and pages[i+1].
 
     Takes the whole page list rather than just the pair, because some continuity
@@ -233,7 +277,7 @@ def score_boundary(pages, i) -> list:
     fired = []
 
     def fire(name, detail):
-        fired.append({"name": name, "weight": WEIGHTS[name], "detail": detail})
+        fired.append(make_signal(name, detail))
 
     # DECISIVE ---------------------------------------------------------------
     if nxt.get("is_slip_sheet"):
@@ -292,6 +336,17 @@ def score_boundary(pages, i) -> list:
             and pages[i - 1].get("header_sig") == ph
             and pages[i - 1].get("header_sig") != nh):
         fire("running_header_change", {"from": ph[:40], "to": nh[:40]})
+
+    # Subject vocabulary turning over. The last structural resort: in a
+    # same-producer Bates production this is the only thing that differs across
+    # a real boundary. Judged against the document's own median overlap, so a
+    # dense report and a bundle of correspondence are each measured on their own
+    # terms. MEDIUM, never decisive: topic shifts inside one long document too.
+    if vocab_median is not None and vocab_median > 0:
+        ov = vocabulary_overlap(prev.get("content_tokens"), nxt.get("content_tokens"))
+        if ov is not None and ov <= vocab_median * VOCAB_DROP_RATIO:
+            fire("vocabulary_change", {"overlap": round(ov, 3),
+                                       "document_median": round(vocab_median, 3)})
 
     # MEDIUM -----------------------------------------------------------------
     if prev.get("rotation") != nxt.get("rotation"):
@@ -356,7 +411,23 @@ def total_score(signals) -> float:
     is no meaningful ranking below that, and letting scores go negative would
     make the candidate band harder to reason about.
     """
-    return round(max(0.0, sum(s["weight"] for s in signals)), 3)
+    return round(max(0.0, sum(s["weight"] for s in signals
+                              if s["name"] not in REVIEW_ONLY_SIGNALS)), 3)
+
+
+def has_strong_evidence(signals) -> bool:
+    """Is at least one CHANGE signal individually strong?
+
+    A cut requires corroborated strong evidence. Medium and weak signals may
+    raise a seam for review, but must not manufacture a cut by piling up: a
+    topic shift plus a section header plus a rotated figure is three soft hints
+    inside one report, not a document boundary. Without this rule, adding
+    vocabulary_change took false cuts on single-document controls from 0.20 to
+    0.60 per document while the real boundaries it found were all soft anyway
+    and reached review regardless.
+    """
+    return any(s["weight"] >= STRONG_SIGNAL_MIN and s["name"] not in REVIEW_ONLY_SIGNALS
+               for s in signals)
 
 
 def change_score(signals) -> float:
@@ -437,11 +508,7 @@ def refine(doc_rec, pdf_path, pending):
             continue
         d = hist_l1(a, b)
         if d > FONT_SIZE_L1_MIN:
-            signals.append({
-                "name": "font_size_change",
-                "weight": WEIGHTS["font_size_change"],
-                "detail": {"l1": round(d, 3)},
-            })
+            signals.append(make_signal("font_size_change", {"l1": round(d, 3)}))
     return len(cache)
 
 
@@ -532,9 +599,11 @@ def segment_document(census, pdf_path=None):
     pages_by_no = {p["page"]: p for p in pages}
     total = census["total_pages"]
 
+    vocab_median = vocabulary_baseline(pages)
+
     scored = []      # (before_page, signals)
     for i in range(len(pages) - 1):
-        signals = score_boundary(pages, i)
+        signals = score_boundary(pages, i, vocab_median)
         if signals:
             scored.append([pages[i + 1]["page"], signals])
 
@@ -558,7 +627,7 @@ def segment_document(census, pdf_path=None):
             "change_score": cs,
             "signals": sorted(signals, key=lambda x: x["name"]),
         }
-        if s >= BOUNDARY_THRESHOLD:
+        if s >= BOUNDARY_THRESHOLD and has_strong_evidence(signals):
             cuts.append(entry)
         elif cs >= CANDIDATE_FLOOR:
             # Deliberately tested against CHANGE score, not net score. Continuity
@@ -596,7 +665,10 @@ def segment_document(census, pdf_path=None):
         "total_pages": total,
         "segmenter_version": SEGMENTER_VERSION,
         "census_version": census.get("census_version"),
+        "contract_versions": _contracts.versions(),
+        "policy": ACTIVE_POLICY,
         "config": {
+            "policy": ACTIVE_POLICY,
             "weights": WEIGHTS,
             "boundary_threshold": BOUNDARY_THRESHOLD,
             "candidate_floor": CANDIDATE_FLOOR,
@@ -606,6 +678,9 @@ def segment_document(census, pdf_path=None):
             "font_size_l1_min": FONT_SIZE_L1_MIN,
             "head_page_count": HEAD_PAGE_COUNT,
             "max_insert_pages": MAX_INSERT_PAGES,
+            "vocab_drop_ratio": VOCAB_DROP_RATIO,
+            "strong_signal_min": STRONG_SIGNAL_MIN,
+            "review_only_signals": sorted(REVIEW_ONLY_SIGNALS),
         },
         "segments": segments,
         "candidate_boundaries": candidates,
@@ -663,9 +738,13 @@ def main():
     ap.add_argument("--census", required=True, help="Folder of Stage 0 census JSON")
     ap.add_argument("--output", required=True, help="Folder to write segment maps into")
     ap.add_argument("--pdf-dir", help="Folder of source PDFs; enables Tier B refinement")
+    ap.add_argument("--policy", choices=sorted(POLICIES), default=DEFAULT_POLICY,
+                    help="segmentation granularity policy (see contracts/segmentation.yaml)")
     ap.add_argument("--report", action="store_true", help="Print documents that segmented into >1 part")
     ap.add_argument("--validate", action="store_true", help="Check segment maps tile the document")
     args = ap.parse_args()
+
+    set_policy(args.policy)
 
     census_dir, out_dir = Path(args.census), Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -676,7 +755,9 @@ def main():
         print(f"No census JSON found in {census_dir}")
         return
 
-    print(f"Stage 0.5 - Segmentation v{SEGMENTER_VERSION}: {len(census_files)} documents")
+    print(f"Stage 0.5 - Segmentation v{SEGMENTER_VERSION} "
+          f"[policy={ACTIVE_POLICY}, threshold={BOUNDARY_THRESHOLD}, "
+          f"contract={_SEG['version']}]: {len(census_files)} documents")
     if pdf_dir is None:
         print("  (Tier B refinement disabled - pass --pdf-dir to enable)")
 
