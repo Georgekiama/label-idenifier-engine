@@ -1,0 +1,12 @@
+# Derived pipeline output - regenerable from the corpus, large, not source.
+census_json/
+segments_json/
+extracted_json/
+goldens/fixtures/
+
+# Corpus PDFs are not distributed with the engine.
+*.pdf
+
+__pycache__/
+*.pyc
+.venv/
