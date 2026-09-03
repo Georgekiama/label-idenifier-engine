@@ -152,6 +152,9 @@ python dashboard/server.py          # http://127.0.0.1:5000
 - **Features.** The raw Feature Matrix row, including span provenance.
 - **Granularity policy** is switchable in the header; *Re-run* re-analyses the
   selected document without re-uploading.
+- **Remove what you have tested.** Hover a document for its **×**, or *Clear all*
+  in the panel header. Deleting removes the stored PDF from the temp directory
+  as well as the row, so the list on screen and the bytes on disk agree.
 
 Contract and stage versions are shown in the header, so any finding can be
 reproduced against the exact configuration that produced it. Nothing leaves the

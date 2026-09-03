@@ -22,6 +22,8 @@ Endpoints
     POST /api/analyze               multipart upload of one or more PDFs
     GET  /api/page/<doc_id>/<page>  rendered page PNG
     GET  /api/document/<doc_id>     re-run analysis (e.g. after a policy change)
+    DEL  /api/document/<doc_id>     forget one uploaded document
+    DEL  /api/documents             forget all uploaded documents
     GET  /api/policies              available granularity policies
 """
 
@@ -239,6 +241,37 @@ def redo(doc_id):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
+@app.route("/api/document/<doc_id>", methods=["DELETE"])
+def forget(doc_id):
+    """Remove one uploaded document from the temp store.
+
+    The dashboard is a scratchpad: a reviewer tries a file, forms a view, and
+    wants it gone. Deleting the stored PDF too keeps the temp directory honest -
+    the list on screen and the bytes on disk say the same thing.
+    """
+    path = stored_path(doc_id)
+    if not path:
+        return jsonify({"deleted": False, "reason": "not stored"}), 404
+    try:
+        path.unlink()
+    except OSError as e:
+        return jsonify({"deleted": False, "reason": str(e)}), 500
+    return jsonify({"deleted": True, "doc_id": doc_id})
+
+
+@app.route("/api/documents", methods=["DELETE"])
+def forget_all():
+    """Clear every uploaded document."""
+    removed, failed = 0, []
+    for f in UPLOAD_DIR.glob("*.pdf"):
+        try:
+            f.unlink()
+            removed += 1
+        except OSError as e:
+            failed.append({"file": f.name, "error": str(e)})
+    return jsonify({"deleted": removed, "failed": failed})
 
 
 @app.route("/api/page/<doc_id>/<int:page>")
