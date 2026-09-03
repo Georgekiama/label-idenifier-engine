@@ -25,12 +25,20 @@ Endpoints
     DEL  /api/document/<doc_id>     forget one uploaded document
     DEL  /api/documents             forget all uploaded documents
     GET  /api/policies              available granularity policies
+    GET  /healthz                   liveness probe for the host
+
+Hosting
+-------
+This is a stateful, CPU-bound app: an uploaded PDF is stored and re-read by
+later requests for page images. It needs a long-running container, not a
+serverless function. See DEPLOY.md.
 """
 
 import io
 import os
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -48,13 +56,72 @@ import role_title  # noqa: E402
 from contracts import loader as contracts  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-UPLOAD_DIR = Path(tempfile.gettempdir()) / "exhibitpro_dashboard"
+UPLOAD_DIR = Path(os.environ.get("EP_UPLOAD_DIR") or (Path(tempfile.gettempdir()) / "exhibitpro_dashboard"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 RENDER_ZOOM = 2.0          # 144 dpi: readable without being slow
 MAX_RENDER_PAGES = 400
 
+# --- Limits -----------------------------------------------------------------
+#
+# Local use needs no limits; a hosted instance accepts arbitrary PDFs from
+# whoever has the URL, so every one of these is a guard against a single request
+# exhausting the box. All are env-overridable.
+MAX_UPLOAD_MB = int(os.environ.get("EP_MAX_UPLOAD_MB", "40"))
+MAX_ANALYSE_PAGES = int(os.environ.get("EP_MAX_PAGES", "600"))
+UPLOAD_TTL_MIN = int(os.environ.get("EP_UPLOAD_TTL_MIN", "180"))
+
+# Optional HTTP basic auth. Unset locally (no prompt); set both on a hosted
+# instance or the dashboard is open to anyone with the link.
+AUTH_USER = os.environ.get("EP_USER")
+AUTH_PASS = os.environ.get("EP_PASSWORD")
+
 app = Flask(__name__, static_folder=None)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+
+@app.before_request
+def require_auth():
+    """Gate everything behind basic auth when credentials are configured.
+
+    Deliberately all-or-nothing: a half-protected audit tool that leaks page
+    images of client documents is worse than one that is obviously open.
+    """
+    if not (AUTH_USER and AUTH_PASS):
+        return None
+    a = request.authorization
+    if a and a.username == AUTH_USER and a.password == AUTH_PASS:
+        return None
+    return ("Authentication required", 401,
+            {"WWW-Authenticate": 'Basic realm="ExhibitPro audit"'})
+
+
+@app.errorhandler(413)
+def too_large(_):
+    return jsonify({"error": f"upload exceeds {MAX_UPLOAD_MB} MB "
+                             f"(set EP_MAX_UPLOAD_MB to raise it)"}), 413
+
+
+def prune_uploads():
+    """Drop uploads older than the TTL.
+
+    The store is a scratchpad, not a repository. On a hosted instance an
+    unbounded temp directory is both a disk-exhaustion risk and a data-retention
+    problem: uploaded client documents should not outlive the session that
+    needed them.
+    """
+    if UPLOAD_TTL_MIN <= 0:
+        return 0
+    cutoff = time.time() - UPLOAD_TTL_MIN * 60
+    removed = 0
+    for f in UPLOAD_DIR.glob("*.pdf"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 # --- analysis ---------------------------------------------------------------
@@ -66,6 +133,10 @@ def analyse(pdf_path: Path, policy: str = None):
         segmenter.set_policy(policy)
 
     census = page_census.census_pdf(pdf_path)
+    if census["total_pages"] > MAX_ANALYSE_PAGES:
+        raise ValueError(
+            f"{census['total_pages']} pages exceeds the {MAX_ANALYSE_PAGES}-page limit "
+            f"(set EP_MAX_PAGES to raise it)")
     seg_map = segmenter.segment_document(census, pdf_path)
 
     pages = {}
@@ -190,6 +261,11 @@ def index():
     return send_from_directory(HERE, "index.html")
 
 
+@app.route("/healthz")
+def healthz():
+    return jsonify({"ok": True, "contracts": contracts.versions()})
+
+
 @app.route("/api/policies")
 def policies():
     return jsonify({
@@ -198,6 +274,15 @@ def policies():
                      for k, v in segmenter.POLICIES.items()},
         "default": segmenter.DEFAULT_POLICY,
         "active": segmenter.ACTIVE_POLICY,
+        # Published so the browser can refuse an oversized upload before sending
+        # it. Werkzeug aborts the connection when MAX_CONTENT_LENGTH is exceeded,
+        # so the 413 body often never reaches the client - checking client-side
+        # is the only way to give a usable message.
+        "limits": {
+            "max_upload_mb": MAX_UPLOAD_MB,
+            "max_pages": MAX_ANALYSE_PAGES,
+            "upload_ttl_min": UPLOAD_TTL_MIN,
+        },
     })
 
 
@@ -207,6 +292,7 @@ def analyze():
     if not files:
         return jsonify({"error": "no files uploaded"}), 400
     policy = request.form.get("policy") or segmenter.DEFAULT_POLICY
+    prune_uploads()
 
     results, errors = [], []
     for f in files:
@@ -295,11 +381,14 @@ def page_image(doc_id, page):
 
 
 def main():
+    # PORT is what Render, Fly and Heroku inject; EP_PORT stays for local use.
     host = os.environ.get("EP_HOST", "127.0.0.1")
-    port = int(os.environ.get("EP_PORT", "5000"))
+    port = int(os.environ.get("PORT") or os.environ.get("EP_PORT") or 5000)
     print("ExhibitPro engine audit dashboard")
     print(f"  contracts: {contracts.versions()}")
-    print(f"  uploads:   {UPLOAD_DIR}")
+    print(f"  uploads:   {UPLOAD_DIR}  (ttl {UPLOAD_TTL_MIN} min)")
+    print(f"  limits:    {MAX_UPLOAD_MB} MB upload, {MAX_ANALYSE_PAGES} pages")
+    print(f"  auth:      {'enabled' if (AUTH_USER and AUTH_PASS) else 'OPEN - set EP_USER/EP_PASSWORD to protect'}")
     print(f"  open:      http://{host}:{port}")
     app.run(host=host, port=port, debug=False, threaded=True)
 

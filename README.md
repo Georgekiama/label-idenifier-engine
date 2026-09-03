@@ -160,6 +160,12 @@ Contract and stage versions are shown in the header, so any finding can be
 reproduced against the exact configuration that produced it. Nothing leaves the
 machine; uploads go to a temp directory.
 
+**Sharing it with someone else:** see [DEPLOY.md](DEPLOY.md). Short version — it
+needs a container, not a serverless function, because an uploaded PDF is stored
+and re-read by later requests for page images. `render.yaml` and `Dockerfile`
+are included. Set `EP_USER`/`EP_PASSWORD` or the dashboard is open to anyone
+with the URL.
+
 ## Stage 1.5 / 2 / 3: units, features, TITLE
 
 ```

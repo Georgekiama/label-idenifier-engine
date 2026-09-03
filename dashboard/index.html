@@ -192,6 +192,7 @@ const esc = s => (s??'').toString().replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt
 const fx = (v,d=2) => (v===null||v===undefined)?'—':(+v).toFixed(d);
 
 let DOCS=[], sel=null, curPage=1, curSeg=null, activeUnit=null;
+let LIMITS={max_upload_mb:40, max_pages:600};
 
 /* ---------- upload ---------- */
 $('#pick').onclick = ()=> $('#file').click();
@@ -202,6 +203,20 @@ $('#file').onchange = e => upload(e.target.files);
 document.addEventListener('drop', e=>{ if(e.dataTransfer.files.length) upload(e.dataTransfer.files); });
 
 async function upload(files){
+  // Refuse oversized uploads here rather than letting the server abort the
+  // connection: an aborted request gives the browser no message to show.
+  const cap = LIMITS.max_upload_mb * 1048576;
+  const total = [...files].reduce((n,f)=>n+f.size, 0);
+  const big = [...files].filter(f=>f.size > cap);
+  if(big.length || total > cap){
+    const mb = b => (b/1048576).toFixed(1);
+    $('#docs').innerHTML = `<div class="err">Upload too large — limit is
+      ${LIMITS.max_upload_mb} MB per request.<br>` +
+      (big.length ? big.map(f=>`${esc(f.name)} is ${mb(f.size)} MB`).join('<br>')
+                  : `these ${files.length} files total ${mb(total)} MB`) +
+      `<br><span class="small">Upload fewer at a time, or raise EP_MAX_UPLOAD_MB.</span></div>`;
+    return;
+  }
   const fd=new FormData();
   [...files].forEach(f=>fd.append('files',f));
   fd.append('policy', $('#policy').value||'balanced');
@@ -509,6 +524,7 @@ $('#clearall').onclick=clearAll;
 (async()=>{
   try{
     const p=await (await fetch('/api/policies')).json();
+    if(p.limits) LIMITS=p.limits;
     const s=$('#policy');
     Object.entries(p.policies).forEach(([k,v])=>{
       const o=el('option'); o.value=k; o.textContent=`${k} (${v.threshold})`; o.title=v.description;

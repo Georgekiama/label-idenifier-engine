@@ -1,0 +1,11 @@
+.git
+__pycache__/
+*.pyc
+census_json/
+segments_json/
+extracted_json/
+goldens/fixtures/
+goldens/realistic/
+goldens/last_report*.json
+*.pdf
+.venv/

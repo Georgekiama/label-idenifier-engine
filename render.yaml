@@ -1,0 +1,30 @@
+# Render blueprint for the ExhibitPro audit dashboard.
+#
+#   1. push this repo to GitHub
+#   2. Render -> New -> Blueprint -> pick the repo
+#   3. set EP_USER and EP_PASSWORD when prompted (they are marked sync:false)
+#
+# Docker is used rather than Render's native Python environment because the OCR
+# fallback needs the Tesseract system binary, which a native env cannot install.
+services:
+  - type: web
+    name: exhibitpro-audit
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # 512 MB free tier OOMs while rendering large PDFs
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # Leave these unset and the dashboard is open to anyone with the URL.
+      - key: EP_USER
+        sync: false
+      - key: EP_PASSWORD
+        sync: false
+      - key: EP_MAX_UPLOAD_MB
+        value: "40"
+      - key: EP_MAX_PAGES
+        value: "600"
+      # Uploaded documents are deleted after this long. Keep it short: these are
+      # other people's files sitting on a server.
+      - key: EP_UPLOAD_TTL_MIN
+        value: "120"
