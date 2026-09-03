@@ -23,6 +23,53 @@ ambiguous seams.
 **Benchmark (198 PDFs / 4,580 pages):** census 30s, segmentation 3.4s. Output of
 both stages is byte-identical across repeat runs, verified by directory hash.
 
+## Goldens: how we know it works
+
+Segmentation quality cannot be measured on a corpus of single documents - every
+cut is a false positive by construction, so precision looks perfect and **recall
+is invisible**. The fixtures solve that by concatenating known PDFs into
+compound files whose boundaries are known by construction. No hand-labelling.
+
+```
+python tools/make_compound_fixtures.py --corpus "<pdfs>" --output goldens/fixtures
+python tools/evaluate_segmentation.py --fixtures goldens/fixtures --check
+python -m pytest tests/ -q
+```
+
+Current baseline (`goldens/baseline.json`, 40 compound PDFs / 135 true seams):
+
+| metric | value | |
+|---|---|---|
+| precision | 0.956 | of the cuts we make, how many are real |
+| recall | 0.481 | of the real boundaries, how many we find |
+| f1 | 0.640 | |
+| assisted_recall | 0.844 | real boundaries either cut **or** queued for review |
+
+**Recall of 0.481 is the honest current state and the top open problem.** The
+engine misses more than half of real boundaries outright; most of those land in
+the review queue rather than vanishing, which is why assisted_recall is 0.844.
+A threshold sweep shows F1 near 0.84 around a threshold of 0.9-1.0 versus 0.43
+at the shipped 1.5, so the default is known to be miscalibrated - but the sweep
+was run against fixtures built from *unrelated* documents, which is easier than
+real intake. Recalibrate against realistic sequences before changing it.
+
+`--check` exits 1 on regression, so this gates a build. Metrics are gated
+individually: a recall improvement cannot pay for itself with false boundaries,
+and a precision improvement cannot pay for itself by refusing to cut.
+
+## Title ground truth
+
+```
+python tools/harvest_titles.py --corpus "<pdfs>" --census census_json --output goldens/labels.csv
+```
+
+79 of 198 titles (40%) harvest automatically from PDF metadata and outlines.
+These are **test data, never training data** - the engine never reads them.
+
+Coverage is biased toward easy documents: 23% of the identified legal documents
+and 0% of documents with scanned first pages carry usable metadata. Hand-label
+the gap, not the corpus.
+
 ### Why Stage 0 exists
 
 Stage 1 reads pages 1–2, which assumes one document per file. Production intake

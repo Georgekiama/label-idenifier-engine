@@ -10,3 +10,6 @@ goldens/fixtures/
 __pycache__/
 *.pyc
 .venv/
+
+# Derived evaluation report; regenerate with tools/evaluate_segmentation.py
+goldens/last_report.json
