@@ -73,6 +73,12 @@ def evaluate(fixtures_dir, threshold=None):
 
     tp = fp = fn = assisted = 0
     per_doc = []
+    # Realistic fixtures tag every seam with a difficulty and every file with a
+    # scenario. Aggregate recall hides the thing that matters most: whether the
+    # engine can find the HARD seams, the ones with no change signal at all.
+    by_difficulty = {}
+    by_scenario = {}
+    negative_controls = {"documents": 0, "false_cuts": 0}
 
     with tempfile.TemporaryDirectory() as tmp:
         for name in sorted(truth):
@@ -95,7 +101,29 @@ def evaluate(fixtures_dir, threshold=None):
             fn += len(miss)
             assisted += len(hit) + len(miss & candidates)
 
+            doc_truth = truth[name]
+            scenario = doc_truth.get("scenario")
+            if scenario:
+                sc = by_scenario.setdefault(scenario, {"tp": 0, "fp": 0, "fn": 0, "docs": 0})
+                sc["tp"] += len(hit); sc["fp"] += len(spurious); sc["fn"] += len(miss)
+                sc["docs"] += 1
+            # A fixture with no true seams is a negative control: it is one real
+            # document with its own internal structure, so every cut is a false
+            # positive against exactly the distractors that matter.
+            if not real:
+                negative_controls["documents"] += 1
+                negative_controls["false_cuts"] += len(predicted)
+            for d in doc_truth.get("seam_detail", []):
+                b = by_difficulty.setdefault(d["difficulty"],
+                                             {"total": 0, "found": 0, "candidate": 0})
+                b["total"] += 1
+                if d["page"] in hit:
+                    b["found"] += 1
+                elif d["page"] in candidates:
+                    b["candidate"] += 1
+
             per_doc.append({
+                "scenario": scenario,
                 "document": name,
                 "true_seams": len(real),
                 "tp": len(hit), "fp": len(spurious), "fn": len(miss),
@@ -109,8 +137,17 @@ def evaluate(fixtures_dir, threshold=None):
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
     assisted_recall = assisted / total_real if total_real else 0.0
 
+    for b in by_difficulty.values():
+        b["recall"] = round(b["found"] / b["total"], 4) if b["total"] else 0.0
+        b["assisted_recall"] = round((b["found"] + b["candidate"]) / b["total"], 4) if b["total"] else 0.0
+    for sc in by_scenario.values():
+        d = sc["tp"] + sc["fn"]
+        sc["recall"] = round(sc["tp"] / d, 4) if d else None
+        sc["false_cuts"] = sc["fp"]
+
     return {
         "fixture_seed": meta.get("seed"),
+        "generator": meta.get("generator", "make_compound_fixtures"),
         "fixture_documents": len(per_doc),
         "true_seams": total_real,
         "tp": tp, "fp": fp, "fn": fn,
@@ -118,6 +155,9 @@ def evaluate(fixtures_dir, threshold=None):
         "recall": round(recall, 4),
         "f1": round(f1, 4),
         "assisted_recall": round(assisted_recall, 4),
+        "by_difficulty": by_difficulty,
+        "by_scenario": by_scenario,
+        "negative_controls": negative_controls,
         "config": {
             "boundary_threshold": segmenter.BOUNDARY_THRESHOLD,
             "candidate_floor": segmenter.CANDIDATE_FLOOR,
@@ -171,6 +211,29 @@ def main():
           f"segmenter={result['config']['segmenter_version']} "
           f"census={result['config']['census_version']}")
     print(f"  TP {result['tp']}  FP {result['fp']}  FN {result['fn']}")
+
+    if result.get("by_difficulty"):
+        print()
+        print("  recall by seam difficulty:")
+        for k in ["easy", "medium", "hard"]:
+            b = result["by_difficulty"].get(k)
+            if not b:
+                continue
+            print(f"    {k:8s} {b['found']:3d}/{b['total']:<3d} cut = {b['recall']:.3f}"
+                  f"   (+{b['candidate']} queued -> assisted {b['assisted_recall']:.3f})")
+    if result.get("by_scenario"):
+        print()
+        print("  by scenario:")
+        for k in sorted(result["by_scenario"]):
+            sc = result["by_scenario"][k]
+            r = "n/a  " if sc["recall"] is None else f"{sc['recall']:.3f}"
+            print(f"    {k:18s} {sc['docs']:3d} docs   recall {r}   false cuts {sc['false_cuts']}")
+    nc = result.get("negative_controls") or {}
+    if nc.get("documents"):
+        print()
+        print(f"  negative controls: {nc['documents']} single documents, "
+              f"{nc['false_cuts']} false cuts "
+              f"({nc['false_cuts']/nc['documents']:.2f} per document)")
 
     if args.report:
         os.makedirs(os.path.dirname(os.path.abspath(args.report)), exist_ok=True)

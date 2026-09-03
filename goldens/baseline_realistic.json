@@ -1,8 +1,8 @@
 {
-  "precision": 0.95,
-  "recall": 0.563,
-  "f1": 0.707,
-  "assisted_recall": 0.8889,
+  "precision": 0.7917,
+  "recall": 0.5588,
+  "f1": 0.6552,
+  "assisted_recall": 0.7255,
   "recorded_with": {
     "boundary_threshold": 1.5,
     "candidate_floor": 0.7,
@@ -10,5 +10,5 @@
     "census_version": "1.4.0"
   },
   "fixture_seed": 20260903,
-  "true_seams": 135
+  "true_seams": 102
 }

@@ -33,18 +33,30 @@ independent signals. Signals are weighted by how much they alone justify a cut:
 
   MEDIUM
     rotation_change         0.80
+    running_header_change   0.70  an established running header changes.
+                                  Deliberately MEDIUM, not STRONG: a report's
+                                  own section headers change too, so this can
+                                  surface a seam for review but must never cut
+                                  on its own. At 1.00 it raised false cuts on
+                                  single-document controls from 0.2 to 1.6 each.
     bates_number_gap        0.70  same prefix, non-consecutive numbering
 
   WEAK
     blank_page              0.40  page i is blank
 
   CONTINUITY (negative - evidence the two pages belong to the same document)
+    slip_sheet_behind      -1.60  a divider belongs to the document it opens
     running_header_match   -1.20  same header template, digits masked
     running_header_alternates -1.20  recto/verso alternating headers
     page_label_continues   -1.20  "Page 12" -> "Page 13"
     bates_consecutive      -1.20  ABC000041 -> ABC000042
     sentence_continuation  -1.00  prose runs across the break
     running_footer_match   -0.80  same footer template
+
+A CUT requires (CHANGE minus CONTINUITY) >= threshold. A CANDIDATE for human
+review requires CHANGE alone >= floor, ignoring continuity entirely - so a
+production-wide Bates run can stop the engine cutting, but can never stop a
+changed seam reaching a person.
 
 A boundary score is CHANGE minus CONTINUITY, clamped at zero. This is what stops
 a report from being split on its own appendix dividers: the running header
@@ -113,7 +125,7 @@ import sys
 import time
 from pathlib import Path
 
-SEGMENTER_VERSION = "1.3.0"
+SEGMENTER_VERSION = "1.4.0"
 
 # --- Tunable model (stamped into every output; bump version if changed) -----
 
@@ -124,6 +136,7 @@ WEIGHTS = {
     "page_size_change": 1.00,
     "page_label_restart": 1.00,
     "font_family_change": 1.00,
+    "running_header_change": 0.70,
     "rotation_change": 0.80,
     "bates_number_gap": 0.70,
     "font_size_change": 0.60,   # Tier B only
@@ -131,6 +144,7 @@ WEIGHTS = {
     # Continuity: negative weights, subtracted from the change score.
     "running_header_match": -1.20,
     "running_header_alternates": -1.20,
+    "slip_sheet_behind": -1.60,
     "running_footer_match": -0.80,
     "page_label_continues": -1.20,
     "bates_consecutive": -1.20,
@@ -213,6 +227,9 @@ def score_boundary(pages, i) -> list:
     Evaluated in a fixed order so the audit trail is byte-stable.
     """
     prev, nxt = pages[i], pages[i + 1]
+    # Header signatures are read once here: they feed a CHANGE signal
+    # (running_header_change) as well as the continuity signals below.
+    ph, nh = prev.get("header_sig"), nxt.get("header_sig")
     fired = []
 
     def fire(name, detail):
@@ -259,6 +276,23 @@ def score_boundary(pages, i) -> list:
                 "to": nxt["font_families"][:6],
             })
 
+    # An ESTABLISHED running header that suddenly changes is a new document.
+    #
+    # This is the only signal that survives a same-producer discovery
+    # production, where fonts, page size, modality and the Bates run are all
+    # continuous across the real boundaries. On the realistic fixtures those
+    # seams carried NO change evidence whatsoever - change_score was 0.00, so
+    # they could not even be queued for review.
+    #
+    # "Established" is load-bearing: the header must have been stable across the
+    # previous pair. Otherwise this fires on page 2 of every document, where a
+    # title page gives way to the running header. The third condition excludes
+    # recto/verso alternation, which is continuity, not change.
+    if (i > 0 and ph and nh and ph != nh
+            and pages[i - 1].get("header_sig") == ph
+            and pages[i - 1].get("header_sig") != nh):
+        fire("running_header_change", {"from": ph[:40], "to": nh[:40]})
+
     # MEDIUM -----------------------------------------------------------------
     if prev.get("rotation") != nxt.get("rotation"):
         fire("rotation_change", {"from": prev.get("rotation"), "to": nxt.get("rotation")})
@@ -274,7 +308,17 @@ def score_boundary(pages, i) -> list:
     # mid-sentence, because nothing in the model could argue for staying joined.
     # These signals let a document defend its own integrity.
 
-    ph, nh = prev.get("header_sig"), nxt.get("header_sig")
+    # A slip sheet belongs to the document it introduces, never to the one
+    # before it. Without this, every divider is cut on BOTH sides and becomes a
+    # one-page orphan segment: on the realistic exhibit-binder fixtures that
+    # produced 12 false cuts.
+    #
+    # It must not fire when the NEXT page is itself a divider, or two adjacent
+    # short pages (a cover sheet followed by the first exhibit's slip sheet)
+    # cancel each other exactly and the real boundary between them disappears.
+    if prev.get("is_slip_sheet") and not nxt.get("is_slip_sheet"):
+        fire("slip_sheet_behind", {"page": prev["page"]})
+
     if ph and nh and ph == nh:
         fire("running_header_match", {"sig": ph})
     elif nh and i > 0 and pages[i - 1].get("header_sig") == nh:
@@ -313,6 +357,27 @@ def total_score(signals) -> float:
     make the candidate band harder to reason about.
     """
     return round(max(0.0, sum(s["weight"] for s in signals)), 3)
+
+
+def change_score(signals) -> float:
+    """Change evidence ALONE, ignoring every continuity signal.
+
+    This exists because continuity must be able to prevent a CUT without being
+    able to hide a seam from REVIEW.
+
+    In a discovery production one continuous Bates run spans every sub-document,
+    so bates_consecutive fires at every single page pair - including the real
+    document boundaries. Netted against change evidence it drove those seams
+    below the candidate floor as well as below the cut threshold, so they were
+    not merely missed, they were missed SILENTLY: on the realistic fixtures,
+    hard-seam recall was 0.179 and assisted recall was also 0.179, meaning not
+    one of the 23 missed boundaries reached a human.
+
+    A signal that fires at nearly every page pair carries no discriminative
+    information. It is entitled to argue against cutting; it is not entitled to
+    suppress the observation that something changed here.
+    """
+    return round(sum(s["weight"] for s in signals if s["weight"] > 0), 3)
 
 
 # --- Tier B: span-level font size fingerprint -------------------------------
@@ -486,14 +551,21 @@ def segment_document(census, pdf_path=None):
     cuts, candidates = [], []
     for before_page, signals in scored:
         s = total_score(signals)
+        cs = change_score(signals)
         entry = {
             "before_page": before_page,
             "score": s,
+            "change_score": cs,
             "signals": sorted(signals, key=lambda x: x["name"]),
         }
         if s >= BOUNDARY_THRESHOLD:
             cuts.append(entry)
-        elif s >= CANDIDATE_FLOOR:
+        elif cs >= CANDIDATE_FLOOR:
+            # Deliberately tested against CHANGE score, not net score. Continuity
+            # decides whether we cut; it must never decide whether a human gets
+            # to look. Anything that changed materially at this seam is surfaced,
+            # even when the document argues convincingly that it is one document.
+            entry["suppressed_by_continuity"] = round(cs - s, 3) if cs > s else 0.0
             candidates.append(entry)
 
     starts = [1] + [c["before_page"] for c in cuts]

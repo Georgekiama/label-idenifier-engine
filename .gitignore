@@ -13,3 +13,5 @@ __pycache__/
 
 # Derived evaluation report; regenerate with tools/evaluate_segmentation.py
 goldens/last_report.json
+goldens/realistic/
+goldens/last_report_realistic.json

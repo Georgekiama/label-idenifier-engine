@@ -28,21 +28,41 @@ import evaluate_segmentation as ev  # noqa: E402
 
 FIXTURES = os.path.join(ROOT, "goldens", "fixtures")
 BASELINE = os.path.join(ROOT, "goldens", "baseline.json")
+REALISTIC = os.path.join(ROOT, "goldens", "realistic")
+BASELINE_REALISTIC = os.path.join(ROOT, "goldens", "baseline_realistic.json")
 LABELS = os.path.join(ROOT, "goldens", "labels.csv")
 
+# Both fixture sets are gated. The naive set (unrelated documents concatenated)
+# measures the easy case; the realistic set adds continuous Bates productions,
+# slip-sheet binders, scanned and rotated inserts, and single-document negative
+# controls. A change that helps one and harms the other must be seen, so neither
+# stands in for the other.
+FIXTURE_SETS = [
+    pytest.param(FIXTURES, BASELINE, id="naive"),
+    pytest.param(REALISTIC, BASELINE_REALISTIC, id="realistic"),
+]
 
-def _has_fixtures():
-    return os.path.exists(os.path.join(FIXTURES, ev.TRUTH_FILENAME))
+
+def _has_fixtures(path=FIXTURES):
+    return os.path.exists(os.path.join(path, ev.TRUTH_FILENAME))
 
 
 requires_fixtures = pytest.mark.skipif(
     not _has_fixtures(), reason="goldens/fixtures not built - see tools/make_compound_fixtures.py"
 )
 
+_METRIC_CACHE = {}
+
+
+def metrics_for(path):
+    if path not in _METRIC_CACHE:
+        _METRIC_CACHE[path] = ev.evaluate(path)
+    return _METRIC_CACHE[path]
+
 
 @pytest.fixture(scope="module")
 def metrics():
-    return ev.evaluate(FIXTURES)
+    return metrics_for(FIXTURES)
 
 
 # --- Determinism ------------------------------------------------------------
@@ -106,18 +126,20 @@ def test_head_pages_lie_inside_their_segment():
 
 # --- Quality gate -----------------------------------------------------------
 
-@requires_fixtures
-def test_no_regression_against_baseline(metrics):
+@pytest.mark.parametrize("fixtures,baseline_path", FIXTURE_SETS)
+def test_no_regression_against_baseline(fixtures, baseline_path):
     """Segmentation quality must not fall below the committed baseline.
 
     If this fails after a deliberate improvement elsewhere, re-record with:
-        python tools/evaluate_segmentation.py --fixtures goldens/fixtures --update-baseline
+        python tools/evaluate_segmentation.py --fixtures <set> --update-baseline
     and say why in the commit message.
     """
-    assert os.path.exists(BASELINE), "no baseline recorded"
-    with open(BASELINE, encoding="utf-8") as f:
+    if not _has_fixtures(fixtures):
+        pytest.skip(f"{fixtures} not built")
+    assert os.path.exists(baseline_path), f"no baseline at {baseline_path}"
+    with open(baseline_path, encoding="utf-8") as f:
         baseline = json.load(f)
-    ok, lines = ev.compare(metrics, baseline)
+    ok, lines = ev.compare(metrics_for(fixtures), baseline)
     assert ok, "segmentation regressed:\n" + "\n".join(lines)
 
 
@@ -129,6 +151,40 @@ def test_precision_stays_high(metrics):
     quietly pay for itself with false boundaries.
     """
     assert metrics["precision"] >= 0.85, metrics
+
+
+def test_negative_controls_are_not_shredded():
+    """Single real documents must not be split into many pieces.
+
+    The realistic set includes 10 unmodified corpus documents with their own
+    appendix dividers, figure plates and spacer pages. They contain no true
+    seams, so this is the direct guard on the failure mode that recalibrating
+    for recall tends to cause.
+    """
+    if not _has_fixtures(REALISTIC):
+        pytest.skip("goldens/realistic not built - see tools/make_realistic_fixtures.py")
+    nc = metrics_for(REALISTIC)["negative_controls"]
+    assert nc["documents"] > 0, "no negative controls in the fixture set"
+    per_doc = nc["false_cuts"] / nc["documents"]
+    assert per_doc <= 0.5, f"{per_doc:.2f} false cuts per single document: {nc}"
+
+
+def test_hard_seams_are_not_missed_silently():
+    """A real boundary the engine cannot cut must still reach a human.
+
+    Continuity evidence decides whether we CUT. It must never decide whether a
+    seam is SEEN. In a continuous Bates production every page pair looks joined,
+    and before this was enforced, 23 of 28 hard seams were absorbed with no cut
+    and no review flag at all.
+    """
+    if not _has_fixtures(REALISTIC):
+        pytest.skip("goldens/realistic not built - see tools/make_realistic_fixtures.py")
+    hard = metrics_for(REALISTIC)["by_difficulty"].get("hard")
+    if not hard:
+        pytest.skip("no hard seams in the fixture set")
+    assert hard["assisted_recall"] >= 0.45, (
+        f"hard seams reaching a human: {hard['assisted_recall']:.3f} - {hard}"
+    )
 
 
 # --- Ground truth -----------------------------------------------------------

@@ -36,22 +36,46 @@ python tools/evaluate_segmentation.py --fixtures goldens/fixtures --check
 python -m pytest tests/ -q
 ```
 
-Current baseline (`goldens/baseline.json`, 40 compound PDFs / 135 true seams):
+Two fixture sets, both gated. The naive set concatenates unrelated documents -
+every seam is easy. The realistic set adds the cases that actually occur:
 
-| metric | value | |
+| scenario | what it tests |
+|---|---|
+| `exhibit_binder` | cover page, then slip-sheet-introduced exhibits |
+| `bates_production` | one continuous Bates run stamped across several same-producer documents - the seams are **invisible** to every change signal |
+| `mixed_intake` | producer changes, scanned exhibits, landscape plates |
+| `single_document` | one real corpus document, unmodified: **zero** true seams, so every cut is a false positive against real internal structure |
+
+```
+python tools/make_realistic_fixtures.py --corpus "<pdfs>" --output goldens/realistic
+python tools/evaluate_segmentation.py --fixtures goldens/realistic --baseline goldens/baseline_realistic.json --check
+```
+
+Current baselines:
+
+| metric | naive | realistic |
 |---|---|---|
-| precision | 0.956 | of the cuts we make, how many are real |
-| recall | 0.481 | of the real boundaries, how many we find |
-| f1 | 0.640 | |
-| assisted_recall | 0.844 | real boundaries either cut **or** queued for review |
+| precision | 0.950 | 0.792 |
+| recall | 0.563 | 0.559 |
+| f1 | 0.707 | 0.655 |
+| assisted_recall | 0.889 | 0.726 |
 
-**Recall of 0.481 is the honest current state and the top open problem.** The
-engine misses more than half of real boundaries outright; most of those land in
-the review queue rather than vanishing, which is why assisted_recall is 0.844.
-A threshold sweep shows F1 near 0.84 around a threshold of 0.9-1.0 versus 0.43
-at the shipped 1.5, so the default is known to be miscalibrated - but the sweep
-was run against fixtures built from *unrelated* documents, which is easier than
-real intake. Recalibrate against realistic sequences before changing it.
+Recall by seam difficulty on the realistic set is the number that matters:
+
+| difficulty | cut | reaching a human |
+|---|---|---|
+| easy (slip sheets) | 0.684 | 0.684 |
+| medium (producer change) | 0.722 | **0.944** |
+| hard (continuous Bates run) | 0.179 | **0.500** |
+
+**Hard seams are the open problem.** In a continuous Bates production the real
+boundaries carry no structural change at all, so they cannot be cut on evidence
+the engine can see. What is enforced instead is that they are never lost
+*silently*: continuity evidence decides whether we CUT, never whether a seam is
+SEEN. Half of them now reach the review queue; before that rule they reached
+nobody.
+
+Negative controls hold at 0.20 false cuts per single document.
 
 `--check` exits 1 on regression, so this gates a build. Metrics are gated
 individually: a recall improvement cannot pay for itself with false boundaries,
