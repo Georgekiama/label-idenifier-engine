@@ -1,0 +1,10 @@
+{
+  "accuracy": 0.2468,
+  "precision_emit": 0.3065,
+  "candidate_accuracy": 0.2597,
+  "documents": 77,
+  "recorded_with": {
+    "feature_set": "2.0.0",
+    "role": "1.0.0"
+  }
+}

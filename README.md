@@ -125,6 +125,56 @@ Coverage is biased toward easy documents: 23% of the identified legal documents
 and 0% of documents with scanned first pages carry usable metadata. Hand-label
 the gap, not the corpus.
 
+## Stage 1.5 / 2 / 3: units, features, TITLE
+
+```
+| Stage | Module | Output |
+|---|---|---|
+| 1.5 | unit_assembly.py | spans -> lines -> units, with provenance |
+| 2 | feature_matrix.py | one row per unit, 21 features |
+| 3/4 | role_title.py | TITLE + confidence + full audit trail |
+```
+
+Assembly is column-aware: spans sharing a baseline in different columns are not
+one line, and reading order runs band by band. Without that, a two-column page
+produced `"HUCKLEBERRYfully dried them. In British Columb"` - a heading welded
+to unrelated body text. Assembly is verified lossless on every run: it may
+regroup text, never invent, drop, or reorder it.
+
+```
+python tools/evaluate_titles.py --corpus "<pdfs>" --check
+```
+
+Measured against 77 harvested titles (match at token-F1 >= 0.70):
+
+| metric | value |
+|---|---|
+| coverage | 0.805 |
+| accuracy | 0.247 |
+| precision_emit | 0.306 |
+| candidate_accuracy | 0.260 |
+| escalation | 0.195 |
+
+**This is an honest first measurement, and it is not good enough to ship.**
+`candidate_accuracy` 0.260 says the scorer, not the calibration, is the ceiling.
+Three things are known about that number:
+
+- Roughly a third of the "misses" are ground-truth mismatches in KIND, not
+  errors: a PDF's `/Title` is often the case caption or the parent publication
+  where the engine correctly returns the document's own heading. `000901` truth
+  is `Docket No. 98-0672, Patterson Drilling Company`; the engine returns
+  `DECISION AND ORDER`.
+- A further group are near-misses scored as zero: `SHORELINE COUNTERMEASURES
+  MANUAL` against a truth of `Shoreline Countermeasures Manual: Tropical
+  Coastal Environments`.
+- The rest are real failures - author lists, court headers and section markers
+  beating the title.
+
+**`auto` is deliberately disabled.** Measured margin-vs-correctness is flat at
+0.26-0.40 above a margin of 0.10, so no band earns unattended acceptance.
+Every emitted title goes to review. Lowering the bar to manufacture an auto rate
+would be inventing confidence the evidence does not support.
+
 ### Why Stage 0 exists
 
 Stage 1 reads pages 1–2, which assumes one document per file. Production intake

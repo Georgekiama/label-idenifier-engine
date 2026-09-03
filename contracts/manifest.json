@@ -1,4 +1,12 @@
 {
+  "assembly": {
+    "content_hash": "d8ecc407836f983a",
+    "version": "ASM-1.3.0"
+  },
+  "features": {
+    "content_hash": "98122a1f0d536ee1",
+    "version": "FS-1.2.0"
+  },
   "segmentation": {
     "content_hash": "a2e8a19d1305b4bd",
     "version": "SEG-1.0.0"

@@ -57,9 +57,14 @@ except ImportError:
 # matching is rejected - a wrong label is worse than a missing one, and a
 # missing one simply routes the document to the hand-labelling queue.
 JUNK_PATTERNS = [
-    re.compile(r"^(untitled|no title|title|document\s*\d*|slide\s*\d+|print job|chapter\s*\d+)\s*$", re.I),
+    re.compile(r"^(untitled|no title|document\s*\d*|slide\s*\d+|print job|chapter\s*\d+)", re.I),
     re.compile(r"^microsoft\s+(word|powerpoint|excel)\b", re.I),
-    re.compile(r"\.(doc|docx|ppt|pptx|xls|xlsx|pdf|qxd|indd|wpd|tif|tiff|p65|fm|pm\d|cdr)\s*$", re.I),
+    # Any filename-like extension ending. Metadata is full of these:
+    # "703 text_all.word", "H-3 text_all.word", "Megafauna Communities.p65".
+    # A real title does not end in a two-to-six character dotted suffix; the
+    # exception, an abbreviation like "Inc." or "U.S.", ends in the dot itself.
+    re.compile(r"\.[A-Za-z0-9]{2,6}\s*$"),
+    re.compile(r"text_all|final[_ ]?draft|^copy of", re.I),
     re.compile(r"^[a-z0-9_\-]{1,20}$", re.I),          # bare token, e.g. "fy09chart"
     re.compile(r"^\s*$"),
 ]

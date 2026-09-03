@@ -1,0 +1,119 @@
+# ExhibitPro - Stage 2 feature engineering + TITLE role contract
+#
+# THIS FILE IS THE OWNED ARTEFACT. Bump `version` whenever any value changes;
+# tests/test_contracts.py enforces it against a content hash.
+#
+# Feature definitions and audit rules live in FEATURE_CATALOGUE_V2.md. This file
+# holds only the numbers those definitions depend on.
+
+version: "FS-1.2.0"
+
+# --- Feature computation constants ------------------------------------------
+features:
+  # F-001 font_rank. Normalised against the segment's char-weighted modal font
+  # size (the BODY baseline), never the page maximum. Page-max normalisation
+  # let a docket stamp define the scale and returned 1.00 for "30050" and
+  # "CCASE:" on the legal subset. Body text lands at 1/cap.
+  font_rank_cap: 2.5
+  font_size_bucket: 0.5        # rounding for the modal-size histogram
+
+  # F-002 center_score. Zero once a unit's centre is this fraction of page
+  # width away from the page centre.
+  center_tolerance_ratio: 0.25
+
+  # F-013 whitespace_isolation. Gaps are expressed in multiples of the page's
+  # median line gap, summed above+below, and divided by this to reach 0-1.
+  isolation_divisor: 4.0
+  isolation_edge_default: 2.0  # assumed gap beyond the first/last unit
+  isolation_undetermined: 0.5  # too few units on the page to judge
+
+  # F-015 zone bands, as top_ratio cut points.
+  header_zone_max: 0.10
+  footer_zone_min: 0.90
+
+  # F-016 typographic_contrast. Distinct char-weighted font sizes holding at
+  # least this share of the segment's characters, capped and scaled to 0-1.
+  contrast_min_share: 0.05
+  contrast_cap: 4
+  # At or below this the segment has no usable typographic signal, and TITLE
+  # scoring re-weights away from Categories A and B onto position and lexis.
+  flat_typography_max: 0.25
+
+# --- TITLE role scoring ------------------------------------------------------
+#
+# Stage 3/4 vertical slice: one role, scored as a weighted sum over the feature
+# matrix. Deliberately a linear model with published weights - it is auditable
+# line by line, which a fitted model would not be.
+title_role:
+  weights:
+    font_rank:             2.40
+    top_ratio_inverted:    1.50   # 1 - top_ratio; identity sits high on a page
+    whitespace_isolation:  1.20
+    uppercase_ratio:       0.80
+    center_score:          0.70
+    bold_flag:             0.60
+    first_occurrence:      0.50
+
+  # Applied on top of the weighted sum.
+  penalties:
+    not_first_page:       -1.20   # identity lives on a segment's FIRST page.
+                                  # Measured: 16 of 79 winners came from page 2
+                                  # and every one of them was wrong. The feature
+                                  # (F-011 page_in_segment) was computed from
+                                  # the start and never scored with.
+    identifier_pattern:   -1.60   # a control number is an IDENTIFIER, not a title
+    date_pattern:         -0.60   # a bare date is a DATE
+    digit_heavy:          -0.80   # tabular data, not prose
+    all_caps_long:        -0.40   # a long shouted block is body text, not a heading
+
+  # When typographic_contrast <= flat_typography_max, Category A/B features are
+  # multiplied by this. On a flat monospace pleading they carry no information,
+  # and confident-looking layout scores are noise.
+  flat_typography_damping: 0.40
+
+  # Eligibility. A unit failing any of these cannot win the role. It stays in
+  # the matrix and the ledger records why it was excluded - never silently
+  # dropped.
+  eligibility:
+    min_words: 2
+    max_words: 28
+    min_chars: 8
+    digit_ratio_max: 0.55
+    exclude_noise: true
+    exclude_footer_zone: true
+
+# --- Confidence and escalation ----------------------------------------------
+#
+# The margin between the top candidate and the runner-up predicts correctness
+# far better than the raw score does. Measured on the harvested title set, so
+# these are calibrated rather than assumed - see tools/evaluate_titles.py.
+#
+# Three states, never two. "A wrong label is worse than no label": below the
+# review floor the engine emits no title at all.
+confidence:
+  # CALIBRATED, not assumed. Measured margin vs. correctness of the top
+  # candidate over the harvested title set:
+  #
+  #     margin band     n    candidate correct
+  #     0.00-0.10      20        0.050
+  #     0.10-0.25      19        0.263
+  #     0.25-0.50      21        0.286
+  #     0.50-0.90      10        0.400
+  #     0.90-1.50       6        0.333
+  #     1.50+           3        0.333
+  #
+  # Two things follow, and the second is uncomfortable.
+  #
+  # 1. Margin cleanly separates the bottom band - below 0.10 the candidate is
+  #    right 5% of the time, so that is the escalate floor.
+  #
+  # 2. Above 0.10 the curve is FLAT at roughly 0.26-0.40. A high margin does not
+  #    currently earn unattended acceptance, so auto is set out of reach and
+  #    nothing is accepted without a human. Lowering this to manufacture an
+  #    "auto" rate would be inventing confidence the evidence does not support.
+  #
+  # Raise auto_margin back into range only when candidate accuracy improves and
+  # a band measurably earns it. This is the dial that decides whether a wrong
+  # label can reach a binder unreviewed.
+  auto_margin: 99.0       # effectively disabled - see note above
+  review_margin: 0.10

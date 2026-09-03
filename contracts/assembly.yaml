@@ -1,0 +1,54 @@
+# ExhibitPro - Stage 1.5 unit assembly contract
+#
+# THIS FILE IS THE OWNED ARTEFACT. Bump `version` whenever any value changes;
+# tests/test_contracts.py enforces it against a content hash.
+
+version: "ASM-1.3.0"
+
+assembly:
+  # Fraction of median line height within which two spans share a baseline.
+  line_tolerance_ratio: 0.6
+
+  # Horizontal gutter detection.
+  #
+  # Spans at the same height are NOT necessarily the same line. On a two-column
+  # page the left and right columns share a baseline, and joining them produced
+  # "HUCKLEBERRYfully dried them. In British Columb" - a heading welded to
+  # unrelated body text from the next column.
+  #
+  # A gap wider than this multiple of the local font size is a column gutter,
+  # not word spacing. Measured on the benchmark corpus: intra-line word gaps run
+  # 3-5 pt at 12 pt type, while column gutters run 50 pt and up, so the
+  # separation is wide and the exact multiple is not delicate.
+  column_gap_ratio: 2.5
+  column_gap_min_pts: 18.0
+
+  # Column BAND detection, used to establish reading order. Left edges further
+  # apart than this start a new band; a band needs this many lines before it is
+  # believed, so a centred heading cannot invent a column.
+  column_band_gap_pts: 40.0
+  min_band_lines: 3
+
+  # Lines merge into one unit below this multiple of the page's median line gap.
+  unit_gap_ratio: 1.6
+  # ...or this multiple of the lines' own font size, whichever is larger.
+  #
+  # The page median is dominated by dense body text. A display heading is set
+  # with proportionally wider leading, so measuring it against the body median
+  # splits every two-line title: "BLACK" / "HUCKLEBERRY" at 20 pt sat 23 pt
+  # apart against a body median of 11 pt, and failed a purely median-relative
+  # test that a 12 pt paragraph would have passed.
+  heading_gap_ratio: 1.4
+  # Font sizes closer than this are "the same size" for merging purposes.
+  size_epsilon: 0.6
+
+  # A heading and the body beneath it can share a size and a gap. Merging them
+  # produces a unit that is neither. Stop a merge when the running unit already
+  # spans this many lines and the candidate line is not itself short - a wrapped
+  # title is two or three lines, a paragraph keeps going.
+  max_heading_lines: 3
+  short_line_words: 12
+
+  # Fallbacks for pages too sparse to derive a median from.
+  default_line_height: 12.0
+  default_line_gap: 12.0
