@@ -125,6 +125,38 @@ Coverage is biased toward easy documents: 23% of the identified legal documents
 and 0% of documents with scanned first pages carry usable metadata. Hand-label
 the gap, not the corpus.
 
+## Audit dashboard
+
+A local tool for examining and fine-tuning the engine. Upload PDFs, see the
+label, and see **on the page itself** which block won and which features paid
+for it.
+
+```
+pip install -r requirements.txt
+python dashboard/server.py          # http://127.0.0.1:5000
+```
+
+- **Upload many PDFs at once** (button or drag-and-drop); each is run through
+  the full pipeline: census, segmentation, assembly, features, TITLE.
+- **Page preview with scored overlays.** Every assembled unit is drawn as a box
+  on the rendered page. The winner is outlined in green with its score; click
+  any other box to see why it lost. Tick *excluded* to show units that were
+  ineligible, each with the rule that excluded it.
+- **Why this label.** A per-feature table - value, weight, contribution, signed
+  bar - that sums to the score. This is the ledger entry a reviewer argues with.
+- **Candidates.** The full ranking. Click one to jump to its page and swap the
+  breakdown, so "why that block and not this one" is two clicks.
+- **Segmentation.** Every cut with the signals that made it, plus boundaries
+  flagged for review where change evidence was present but continuity outweighed
+  it.
+- **Features.** The raw Feature Matrix row, including span provenance.
+- **Granularity policy** is switchable in the header; *Re-run* re-analyses the
+  selected document without re-uploading.
+
+Contract and stage versions are shown in the header, so any finding can be
+reproduced against the exact configuration that produced it. Nothing leaves the
+machine; uploads go to a temp directory.
+
 ## Stage 1.5 / 2 / 3: units, features, TITLE
 
 ```

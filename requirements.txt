@@ -1,3 +1,11 @@
+# Engine
 pymupdf
+pyyaml
+
+# OCR fallback (only imported when a page has no embedded text; also needs the
+# Tesseract engine installed separately - see README)
 pytesseract
 pillow
+
+# Audit dashboard (dashboard/server.py) - not needed to run the engine itself
+flask

@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ExhibitPro — Engine Audit</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --ink:#16191d; --muted:#6b7280; --line:#e3e6ea;
+  --accent:#2563eb; --win:#16a34a; --warn:#d97706; --bad:#dc2626;
+  --chip:#eef2f7; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1115; --panel:#171a20; --ink:#e6e8ec; --muted:#9aa3b2; --line:#272c35;
+  --chip:#1e232b;
+}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+button{font:inherit;cursor:pointer}
+h1,h2,h3{margin:0}
+
+header{display:flex;align-items:center;gap:16px;padding:12px 18px;background:var(--panel);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;flex-wrap:wrap}
+header h1{font-size:15px;font-weight:650;letter-spacing:-.01em}
+header .sub{color:var(--muted);font-size:12px}
+.spacer{flex:1}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:8px 14px;font-weight:550}
+.btn.ghost{background:var(--chip);color:var(--ink);border:1px solid var(--line)}
+.btn:disabled{opacity:.5;cursor:default}
+select{font:inherit;padding:7px 9px;border-radius:7px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink)}
+
+#layout{display:grid;grid-template-columns:260px minmax(420px,1.1fr) minmax(380px,1fr);
+  gap:14px;padding:14px;align-items:start}
+@media(max-width:1200px){#layout{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.panel>h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+  padding:11px 13px;border-bottom:1px solid var(--line);font-weight:600}
+.body{padding:13px}
+
+/* documents */
+.doc{padding:10px 13px;border-bottom:1px solid var(--line);cursor:pointer}
+.doc:hover{background:var(--chip)}
+.doc.sel{background:color-mix(in srgb,var(--accent) 12%,transparent);
+  box-shadow:inset 3px 0 0 var(--accent)}
+.doc .n{font-weight:600;font-size:13px;word-break:break-all}
+.doc .m{color:var(--muted);font-size:11.5px;margin-top:3px}
+
+.badge{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;
+  font-weight:650;text-transform:uppercase;letter-spacing:.04em}
+.b-auto{background:color-mix(in srgb,var(--win) 18%,transparent);color:var(--win)}
+.b-review{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.b-escalate{background:color-mix(in srgb,var(--bad) 15%,transparent);color:var(--bad)}
+.b-error{background:var(--chip);color:var(--muted)}
+
+/* page preview */
+.pagebar{display:flex;align-items:center;gap:8px;padding:9px 13px;border-bottom:1px solid var(--line);
+  flex-wrap:wrap;font-size:12.5px}
+.pagebar .grow{flex:1}
+.stage{position:relative;background:var(--chip);padding:14px;overflow:auto;max-height:78vh}
+.sheet{position:relative;margin:0 auto;box-shadow:0 2px 14px rgba(0,0,0,.18);background:#fff;width:100%}
+.sheet img{display:block;width:100%;height:auto}
+.box{position:absolute;border:1.5px solid rgba(37,99,235,.45);border-radius:2px;cursor:pointer;
+  background:rgba(37,99,235,.06);transition:background .12s}
+.box:hover{background:rgba(37,99,235,.20)}
+.box.excluded{border-color:rgba(120,120,120,.35);background:rgba(120,120,120,.05);border-style:dashed}
+.box.winner{border:2.5px solid var(--win);background:color-mix(in srgb,var(--win) 18%,transparent);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--win) 22%,transparent)}
+.box.active{border:2.5px solid var(--warn);background:color-mix(in srgb,var(--warn) 22%,transparent)}
+.box .tag{position:absolute;top:-9px;left:-2px;font:10px/1.4 var(--mono);background:var(--win);
+  color:#fff;padding:0 5px;border-radius:3px;white-space:nowrap}
+.box.active .tag{background:var(--warn)}
+
+/* audit */
+.label-out{padding:13px;border-bottom:1px solid var(--line)}
+.label-out .val{font-size:17px;font-weight:640;line-height:1.35;margin:7px 0}
+.label-out .none{color:var(--muted);font-style:italic;font-weight:400;font-size:15px}
+.kv{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px;font-family:var(--mono)}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;
+  letter-spacing:.04em;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+td.num{text-align:right;font-family:var(--mono);font-size:12px;white-space:nowrap}
+tr.neg td.num.c{color:var(--bad)}
+tr.pos td.num.c{color:var(--win)}
+.bar{height:6px;border-radius:3px;background:var(--chip);position:relative;min-width:56px}
+.bar i{position:absolute;top:0;bottom:0;border-radius:3px}
+.bar i.p{background:var(--win);left:50%}
+.bar i.n{background:var(--bad);right:50%}
+
+.cand{padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;gap:9px;align-items:baseline}
+.cand:hover{background:var(--chip)}
+.cand.active{background:color-mix(in srgb,var(--warn) 13%,transparent)}
+.cand .s{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:44px;text-align:right}
+.cand .t{flex:1;font-size:12.5px}
+.rank1 .s{color:var(--win);font-weight:700}
+
+.tabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tab{background:none;border:0;padding:7px 11px;border-radius:7px 7px 0 0;color:var(--muted);
+  font-size:12.5px;font-weight:550}
+.tab.on{background:var(--chip);color:var(--ink)}
+.tabpane{display:none}.tabpane.on{display:block}
+
+.sig{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 6px;border-radius:4px;
+  margin:2px 3px 2px 0;background:var(--chip)}
+.sig.p{color:var(--win)}.sig.n{color:var(--bad)}
+.seg{padding:10px 13px;border-bottom:1px solid var(--line);cursor:pointer}
+.seg:hover{background:var(--chip)}
+.seg.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.empty{padding:40px 20px;text-align:center;color:var(--muted)}
+.pagehint{position:absolute;left:0;right:0;top:0;background:color-mix(in srgb,var(--warn) 16%,var(--panel));
+  border-bottom:1px solid var(--line);padding:8px 12px;font-size:12px;color:var(--ink)}
+.pagehint a{color:var(--accent);font-weight:600;text-decoration:none;margin:0 2px}
+.drop{border:2px dashed var(--line);border-radius:11px;padding:34px;text-align:center;color:var(--muted);margin:13px}
+.drop.over{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+code{font-family:var(--mono);font-size:11.5px;background:var(--chip);padding:1px 5px;border-radius:4px}
+.err{color:var(--bad);font-size:12.5px;padding:10px 13px}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>ExhibitPro — Engine Audit</h1>
+    <div class="sub" id="versions">loading…</div>
+  </div>
+  <div class="spacer"></div>
+  <label class="small muted" for="policy">granularity</label>
+  <select id="policy" title="Segmentation granularity policy"></select>
+  <button class="btn ghost" id="reanalyze" disabled>Re-run</button>
+  <button class="btn" id="pick">Upload PDFs</button>
+  <input type="file" id="file" accept="application/pdf" multiple hidden>
+</header>
+
+<div id="layout">
+  <!-- documents -->
+  <div class="panel">
+    <h2>Documents</h2>
+    <div id="docs"><div class="drop" id="drop">Drop PDFs here<br><span class="small">or use Upload</span></div></div>
+  </div>
+
+  <!-- page preview -->
+  <div class="panel">
+    <h2>Page preview — click any block to audit it</h2>
+    <div class="pagebar">
+      <button class="btn ghost" id="prev">‹</button>
+      <span id="pageno" class="muted">—</span>
+      <button class="btn ghost" id="next">›</button>
+      <span class="grow"></span>
+      <label class="small"><input type="checkbox" id="showboxes" checked> blocks</label>
+      <label class="small"><input type="checkbox" id="showexcluded"> excluded</label>
+    </div>
+    <div class="stage"><div class="sheet" id="sheet"><div class="empty">No document selected</div></div></div>
+  </div>
+
+  <!-- audit -->
+  <div class="panel">
+    <h2>Audit trail</h2>
+    <div id="labelout" class="label-out"><div class="muted small">No document selected</div></div>
+    <div class="tabs">
+      <button class="tab on" data-t="score">Why this label</button>
+      <button class="tab" data-t="cands">Candidates</button>
+      <button class="tab" data-t="segs">Segmentation</button>
+      <button class="tab" data-t="feat">Features</button>
+    </div>
+    <div id="t-score" class="tabpane on"><div class="body muted small">—</div></div>
+    <div id="t-cands" class="tabpane"><div class="body muted small">—</div></div>
+    <div id="t-segs"  class="tabpane"><div class="body muted small">—</div></div>
+    <div id="t-feat"  class="tabpane"><div class="body muted small">—</div></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (t,c,h) => { const n=document.createElement(t); if(c)n.className=c; if(h!==undefined)n.innerHTML=h; return n; };
+const esc = s => (s??'').toString().replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fx = (v,d=2) => (v===null||v===undefined)?'—':(+v).toFixed(d);
+
+let DOCS=[], sel=null, curPage=1, curSeg=null, activeUnit=null;
+
+/* ---------- upload ---------- */
+$('#pick').onclick = ()=> $('#file').click();
+$('#file').onchange = e => upload(e.target.files);
+// Queried each time: the drop zone is replaced whenever the document list rerenders.
+['dragenter','dragover'].forEach(k=>document.addEventListener(k,e=>{e.preventDefault();const d=$('#drop');d&&d.classList.add('over');}));
+['dragleave','drop'].forEach(k=>document.addEventListener(k,e=>{e.preventDefault();const d=$('#drop');d&&d.classList.remove('over');}));
+document.addEventListener('drop', e=>{ if(e.dataTransfer.files.length) upload(e.dataTransfer.files); });
+
+async function upload(files){
+  const fd=new FormData();
+  [...files].forEach(f=>fd.append('files',f));
+  fd.append('policy', $('#policy').value||'balanced');
+  $('#docs').innerHTML='<div class="empty">Analysing '+files.length+' file(s)…</div>';
+  try{
+    const r = await fetch('/api/analyze',{method:'POST',body:fd});
+    const j = await r.json();
+    DOCS = j.documents||[];
+    (j.errors||[]).forEach(e=>console.warn('failed:',e));
+    renderDocs(j.errors||[]);
+    if(DOCS.length) select(0);
+  }catch(err){ $('#docs').innerHTML='<div class="err">Upload failed: '+esc(err.message)+'</div>'; }
+}
+
+$('#reanalyze').onclick = async ()=>{
+  if(!sel) return;
+  const r = await fetch('/api/document/'+sel.doc_id+'?policy='+encodeURIComponent($('#policy').value));
+  const j = await r.json();
+  if(j.error){ alert(j.error); return; }
+  const name = sel.filename; Object.assign(sel, j); sel.filename = name;
+  renderDocs(); renderAll();
+};
+
+/* ---------- documents ---------- */
+function confOf(d){
+  const t=(d.segments||[]).map(s=>s.title&&s.title.confidence).filter(Boolean);
+  if(!t.length) return 'error';
+  if(t.includes('escalate')&&t.every(x=>x==='escalate')) return 'escalate';
+  if(t.includes('review')) return 'review';
+  return t[0];
+}
+function renderDocs(errors){
+  const box=$('#docs'); box.innerHTML='';
+  DOCS.forEach((d,i)=>{
+    const c=confOf(d);
+    const n=el('div','doc'+(sel===d?' sel':''));
+    n.innerHTML=`<div class="n">${esc(d.filename)}</div>
+      <div class="m">${d.total_pages} pages · ${d.segments.length} segment${d.segments.length>1?'s':''}
+      · <span class="badge b-${c}">${c}</span></div>`;
+    n.onclick=()=>select(i);
+    box.appendChild(n);
+  });
+  (errors||[]).forEach(e=>box.appendChild(el('div','err',esc(e.filename)+': '+esc(e.error))));
+  if(!DOCS.length && !(errors||[]).length)
+    box.innerHTML='<div class="drop" id="drop">Drop PDFs here<br><span class="small">or use Upload</span></div>';
+}
+
+function select(i){
+  sel=DOCS[i]; curSeg=sel.segments[0]||null;
+  curPage=curSeg?curSeg.head_pages[0]:1; activeUnit=null;
+  $('#reanalyze').disabled=false;
+  renderDocs(); renderAll();
+}
+
+function renderAll(){ renderPage(); renderLabel(); renderScore(); renderCands(); renderSegs(); renderFeat(); renderVersions(); }
+
+function renderVersions(){
+  // Every number on this screen came from a specific set of contracts. Show
+  // which, so a finding can be reproduced against the same configuration.
+  if(!sel||!sel.versions){ return; }
+  const v=sel.versions, c=v.contracts||{};
+  $('#versions').textContent =
+    `census ${v.census} · seg ${v.segmenter} · assembly ${v.assembly} · features ${v.feature_set} · role ${v.role}`
+    + `  |  contracts: ` + Object.entries(c).map(([k,x])=>`${k} ${x}`).join(' · ');
+}
+
+/* ---------- page + overlay ---------- */
+function segForPage(p){
+  return (sel.segments||[]).find(s=>p>=s.start_page&&p<=s.end_page)||sel.segments[0];
+}
+function renderPage(){
+  const sheet=$('#sheet');
+  if(!sel){ sheet.innerHTML='<div class="empty">No document selected</div>'; return; }
+  curPage=Math.max(1,Math.min(curPage,sel.total_pages));
+  const geo=sel.pages[curPage]||{width:612,height:792};
+  $('#pageno').textContent=`page ${curPage} / ${sel.total_pages} · ${geo.size_class||''} ${geo.orientation||''} · ${geo.modality||''}`;
+  sheet.innerHTML='';
+  const img=el('img'); img.src=`/api/page/${sel.doc_id}/${curPage}`; img.alt=`page ${curPage}`;
+  sheet.appendChild(img);
+
+  if(!$('#showboxes').checked) return;
+  const seg=segForPage(curPage); if(!seg||!seg.units) return;
+  // Only a segment's HEAD pages are assembled and scored - that is the whole
+  // point of Stage 0.5. Say so, rather than showing a bare page and letting the
+  // reviewer wonder why nothing is highlighted.
+  if(!seg.head_pages.includes(curPage)){
+    const note=el('div','pagehint',
+      `Not a head page. Segment ${seg.index} is scored from page${seg.head_pages.length>1?'s':''} `+
+      seg.head_pages.map(p=>`<a href="#" data-p="${p}">${p}</a>`).join(', ')+
+      ` — only those are assembled into units.`);
+    sheet.appendChild(note);
+    note.querySelectorAll('a').forEach(a=>a.onclick=ev=>{
+      ev.preventDefault(); curPage=+a.dataset.p; activeUnit=null; renderPage(); });
+    return;
+  }
+  const showEx=$('#showexcluded').checked;
+  seg.units.filter(u=>u.page===curPage).forEach(u=>{
+    const excluded = u.score===null;
+    if(excluded && !showEx) return;
+    const b=el('div','box'+(u.is_winner?' winner':'')+(excluded?' excluded':'')+(activeUnit===u.unit_id?' active':''));
+    b.style.left  = (u.x/geo.width*100)+'%';
+    b.style.top   = (u.y/geo.height*100)+'%';
+    b.style.width = (u.width/geo.width*100)+'%';
+    b.style.height= (u.height/geo.height*100)+'%';
+    b.title = (excluded? 'excluded: '+u.excluded_reasons.join(', ') : 'score '+fx(u.score))+'\n'+u.text.slice(0,140);
+    if(u.is_winner) b.appendChild(el('div','tag','TITLE '+fx(u.score)));
+    else if(activeUnit===u.unit_id) b.appendChild(el('div','tag',fx(u.score)));
+    b.onclick=()=>{ activeUnit=u.unit_id; curSeg=seg; renderPage(); renderScore(u); showTab('score'); };
+    $('#sheet').appendChild(b);
+  });
+}
+$('#prev').onclick=()=>{curPage--;activeUnit=null;renderPage();};
+$('#next').onclick=()=>{curPage++;activeUnit=null;renderPage();};
+$('#showboxes').onchange=renderPage; $('#showexcluded').onchange=renderPage;
+
+/* ---------- label ---------- */
+function renderLabel(){
+  const box=$('#labelout');
+  if(!sel||!curSeg){ box.innerHTML='<div class="muted small">No document selected</div>'; return; }
+  const t=curSeg.title||{};
+  const val = t.value ? esc(t.value)
+    : `<span class="none">no label emitted — ${esc(t.confidence||'escalate')}</span>`;
+  box.innerHTML=`
+    <div class="small muted">TITLE · segment ${curSeg.index} (pages ${curSeg.start_page}–${curSeg.end_page})
+      <span class="badge b-${esc(t.confidence||'error')}">${esc(t.confidence||'error')}</span></div>
+    <div class="val">${val}</div>
+    ${t.value?'':`<div class="small muted">top candidate was: “${esc(t.candidate||'—')}”</div>`}
+    <div class="kv">
+      <span>score ${fx(t.score)}</span><span>margin ${fx(t.margin)}</span>
+      <span>${t.excluded_count||0} excluded</span>
+      ${t.flat_typography?'<span title="segment has no usable typographic contrast; layout features damped">flat typography</span>':''}
+    </div>`;
+}
+
+/* ---------- why this label ---------- */
+function renderScore(unit){
+  const pane=$('#t-score');
+  if(!sel||!curSeg){ pane.innerHTML='<div class="body muted small">—</div>'; return; }
+  const t=curSeg.title||{};
+  let contribs=t.contributions||[], head='Winning block', txt=t.candidate||'';
+  if(unit){ contribs=unit.contributions||[]; head='Selected block'; txt=unit.text;
+    if(unit.score===null) contribs=[]; }
+
+  let h=`<div class="body"><div class="small muted">${head}</div>
+    <div style="margin:6px 0 12px;font-size:13.5px">“${esc((txt||'').slice(0,240))}”</div>`;
+
+  if(unit && unit.score===null){
+    h+=`<div class="small"><b>Not eligible for TITLE.</b> Rules that excluded it:
+      ${unit.excluded_reasons.map(r=>`<span class="sig n">${esc(r)}</span>`).join('')}
+      <div class="muted" style="margin-top:8px">It stays in the matrix and in this audit record — nothing is silently dropped.</div>
+      </div></div>`;
+    pane.innerHTML=h; return;
+  }
+  if(!contribs.length){ pane.innerHTML=h+'<div class="muted small">No scoring record.</div></div>'; return; }
+
+  const max=Math.max(...contribs.map(c=>Math.abs(c.contribution)),0.001);
+  h+=`<table><thead><tr><th>Feature</th><th class="num">Value</th><th class="num">Weight</th>
+      <th class="num">Contribution</th><th></th></tr></thead><tbody>`;
+  let total=0;
+  contribs.forEach(c=>{
+    total+=c.contribution||0;
+    const pct=Math.abs(c.contribution)/max*50;
+    const bar = c.contribution>=0
+      ? `<i class="p" style="width:${pct}%"></i>` : `<i class="n" style="width:${pct}%"></i>`;
+    h+=`<tr class="${c.contribution<0?'neg':'pos'}">
+      <td>${esc(c.feature)}${c.note?` <span class="muted small">(${esc(c.note)})</span>`:''}</td>
+      <td class="num">${c.value===null?'null':fx(c.value)}</td>
+      <td class="num">${fx(c.weight)}</td>
+      <td class="num c">${c.contribution>=0?'+':''}${fx(c.contribution)}</td>
+      <td><div class="bar">${bar}</div></td></tr>`;
+  });
+  h+=`<tr><td><b>Total</b></td><td class="num"></td><td class="num"></td>
+      <td class="num"><b>${fx(total)}</b></td><td></td></tr></tbody></table></div>`;
+  pane.innerHTML=h;
+}
+
+/* ---------- candidates ---------- */
+function renderCands(){
+  const pane=$('#t-cands');
+  if(!curSeg){ pane.innerHTML='<div class="body muted small">—</div>'; return; }
+  const units=(curSeg.units||[]).filter(u=>u.score!==null).sort((a,b)=>b.score-a.score);
+  if(!units.length){ pane.innerHTML='<div class="body muted small">No eligible candidates.</div>'; return; }
+  const box=el('div');
+  units.slice(0,25).forEach((u,i)=>{
+    const n=el('div','cand'+(i===0?' rank1':'')+(activeUnit===u.unit_id?' active':''));
+    n.innerHTML=`<span class="s">${fx(u.score)}</span>
+      <span class="t">${esc(u.text.slice(0,120))}
+      <span class="muted small"> · p${u.page}${u.is_winner?' · winner':''}</span></span>`;
+    n.onclick=()=>{ activeUnit=u.unit_id; curPage=u.page; renderPage(); renderScore(u); renderCands(); };
+    box.appendChild(n);
+  });
+  const ex=(curSeg.units||[]).filter(u=>u.score===null);
+  if(ex.length){
+    box.appendChild(el('div','body small muted',`<b>${ex.length} excluded</b> — tick “excluded” above to see them on the page.`));
+  }
+  pane.innerHTML=''; pane.appendChild(box);
+}
+
+/* ---------- segmentation ---------- */
+function renderSegs(){
+  const pane=$('#t-segs');
+  if(!sel){ pane.innerHTML='<div class="body muted small">—</div>'; return; }
+  const box=el('div');
+  box.appendChild(el('div','body small muted',
+    `policy <code>${esc(sel.policy||'—')}</code> · ${sel.stats.segments} segment(s),
+     ${sel.stats.cuts} cut(s), ${sel.stats.candidates} flagged for review`));
+  sel.segments.forEach(s=>{
+    const n=el('div','seg'+(curSeg===s?' sel':''));
+    const sig=(s.signals||[]).map(g=>
+      `<span class="sig ${g.weight>=0?'p':'n'}">${esc(g.name)} ${g.weight>=0?'+':''}${g.weight}</span>`).join('');
+    n.innerHTML=`<div><b>Segment ${s.index}</b> · pages ${s.start_page}–${s.end_page}
+        <span class="muted small">(heads ${s.head_pages.join(', ')})</span></div>
+      <div class="small muted">opened by ${esc(s.opened_by)}${s.boundary_score!==null?` · score ${fx(s.boundary_score)}`:''}</div>
+      ${sig?`<div style="margin-top:4px">${sig}</div>`:''}
+      ${s.title&&s.title.value?`<div class="small" style="margin-top:5px">→ “${esc(s.title.value.slice(0,80))}”</div>`
+        :`<div class="small muted" style="margin-top:5px">→ no label (${esc((s.title||{}).confidence||'—')})</div>`}`;
+    n.onclick=()=>{ curSeg=s; curPage=s.head_pages[0]; activeUnit=null; renderAll(); };
+    box.appendChild(n);
+  });
+  const cb=sel.candidate_boundaries||[];
+  if(cb.length){
+    const d=el('div','body');
+    d.innerHTML=`<div class="small muted" style="margin-bottom:6px"><b>${cb.length} boundaries flagged for review</b>
+      — change evidence was present but continuity outweighed it, so no cut was made.</div>`+
+      cb.slice(0,12).map(c=>`<div class="small">before p${c.before_page} · change ${fx(c.change_score)} · net ${fx(c.score)}
+        ${(c.signals||[]).map(g=>`<span class="sig ${g.weight>=0?'p':'n'}">${esc(g.name)}</span>`).join('')}</div>`).join('');
+    box.appendChild(d);
+  }
+  pane.innerHTML=''; pane.appendChild(box);
+}
+
+/* ---------- features ---------- */
+function renderFeat(){
+  const pane=$('#t-feat');
+  if(!curSeg||!curSeg.units||!curSeg.units.length){ pane.innerHTML='<div class="body muted small">—</div>'; return; }
+  const u = curSeg.units.find(x=>x.unit_id===activeUnit)
+         || curSeg.units.find(x=>x.is_winner) || curSeg.units[0];
+  const f=u.features||{};
+  let h=`<div class="body"><div class="small muted">Feature Matrix row · <code>${esc(u.unit_id)}</code>
+    · spans <code>${esc((u.source_span_ids||[]).slice(0,6).join(' '))}${u.source_span_ids.length>6?' …':''}</code></div>
+    <div style="margin:6px 0 10px;font-size:13px">“${esc(u.text.slice(0,180))}”</div>
+    <table><tbody>`;
+  Object.keys(f).sort().forEach(k=>{
+    const v=f[k];
+    h+=`<tr><td>${esc(k)}</td><td class="num">${v===null?'<span class="muted">null</span>'
+      :(typeof v==='number'?fx(v,4):esc(v))}</td></tr>`;
+  });
+  h+='</tbody></table>';
+  if(curSeg.segment_stats){
+    const s=curSeg.segment_stats;
+    h+=`<div class="small muted" style="margin-top:10px">segment: body baseline ${fx(s.body_baseline)}pt ·
+      typographic contrast ${fx(s.typographic_contrast)} ${s.flat_typography?'· <b>flat</b>':''}</div>`;
+  }
+  pane.innerHTML=h+'</div>';
+}
+
+/* ---------- tabs ---------- */
+function showTab(t){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  document.querySelectorAll('.tabpane').forEach(p=>p.classList.toggle('on',p.id==='t-'+t));
+}
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.t));
+
+/* ---------- boot ---------- */
+(async()=>{
+  try{
+    const p=await (await fetch('/api/policies')).json();
+    const s=$('#policy');
+    Object.entries(p.policies).forEach(([k,v])=>{
+      const o=el('option'); o.value=k; o.textContent=`${k} (${v.threshold})`; o.title=v.description;
+      if(k===p.default) o.selected=true; s.appendChild(o);
+    });
+  }catch(e){ console.warn(e); }
+  $('#versions').textContent='no document loaded — upload PDFs to begin';
+})();
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT') return;
+  if(e.key==='ArrowLeft'){curPage--;activeUnit=null;renderPage();}
+  if(e.key==='ArrowRight'){curPage++;activeUnit=null;renderPage();}
+});
+</script>
+</body>
+</html>
