@@ -128,6 +128,21 @@ tr.pos td.num.c{color:var(--win)}
 .drop.over{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
 code{font-family:var(--mono);font-size:11.5px;background:var(--chip);padding:1px 5px;border-radius:4px}
 .err{color:var(--bad);font-size:12.5px;padding:10px 13px}
+
+/* identity composer */
+.lbl{padding:10px 13px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;gap:10px;align-items:flex-start}
+.lbl:hover{background:var(--chip)}
+.lbl.active{background:color-mix(in srgb,var(--accent) 12%,transparent);box-shadow:inset 3px 0 0 var(--accent)}
+.lbl .rk{font:700 12px/1.6 var(--mono);min-width:20px;color:var(--muted)}
+.lbl.elect .rk{color:var(--win)}
+.lbl .tx{flex:1}
+.lbl .tt{font-size:13.5px;font-weight:600;line-height:1.35}
+.lbl.elect .tt{font-size:14.5px}
+.lbl .mt{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px}
+.lbl .sc{font:700 13px/1.4 var(--mono)}
+.divider{padding:6px 13px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);background:var(--chip);border-bottom:1px solid var(--line)}
+.chip{display:inline-block;font-size:10px;font-family:var(--mono);padding:0 5px;border-radius:4px;background:var(--chip);margin-right:4px}
+.chip.comp{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -173,8 +188,10 @@ code{font-family:var(--mono);font-size:11.5px;background:var(--chip);padding:1px
     <h2>Audit trail</h2>
     <div id="labelout" class="label-out"><div class="muted small">No document selected</div></div>
     <div class="tabs">
-      <button class="tab on" data-t="score">Why this label</button>
-      <button class="tab" data-t="cands">Candidates</button>
+      <button class="tab on" data-t="labels">Top 3 labels</button>
+      <button class="tab" data-t="evid">Evidence</button>
+      <button class="tab" data-t="score">Title scorer</button>
+      <button class="tab" data-t="cands">Blocks</button>
       <button class="tab" data-t="segs">Segmentation</button>
       <button class="tab" data-t="feat">Features</button>
     </div>
@@ -191,7 +208,7 @@ const el = (t,c,h) => { const n=document.createElement(t); if(c)n.className=c; i
 const esc = s => (s??'').toString().replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fx = (v,d=2) => (v===null||v===undefined)?'—':(+v).toFixed(d);
 
-let DOCS=[], sel=null, curPage=1, curSeg=null, activeUnit=null;
+let DOCS=[], sel=null, curPage=1, curSeg=null, activeUnit=null, activeLabel=0;
 let LIMITS={max_upload_mb:40, max_pages:600};
 
 /* ---------- upload ---------- */
@@ -310,7 +327,93 @@ function select(i){
   renderDocs(); renderAll();
 }
 
-function renderAll(){ renderPage(); renderLabel(); renderScore(); renderCands(); renderSegs(); renderFeat(); renderVersions(); }
+function renderAll(){ activeLabel=0; renderPage(); renderLabel(); renderLabels(); renderEvidence();
+  renderScore(); renderCands(); renderSegs(); renderFeat(); renderVersions(); }
+
+/* ---------- identity composer: elected labels ---------- */
+function identity(){ return (curSeg && curSeg.identity) || {labels:[],elected:0}; }
+
+function renderLabels(){
+  const pane=$('#t-labels'), id=identity();
+  if(!id.labels.length){ pane.innerHTML='<div class="body muted small">No labels composed.</div>'; return; }
+  const box=el('div');
+  box.appendChild(el('div','divider','elected \u2014 '+(id.candidates||0)+' candidates considered'));
+  id.labels.forEach(function(L,i){
+    if(i===id.elected) box.appendChild(el('div','divider','also considered'));
+    const n=el('div','lbl'+(i<id.elected?' elect':'')+(activeLabel===i?' active':''));
+    const comp=L.composition?'<span class="chip comp">composed</span>':'';
+    n.innerHTML='<span class="rk">'+(i+1)+'</span><span class="tx">'
+      +'<div class="tt">'+esc(L.text)+'</div>'
+      +'<div class="mt">'+comp
+      +'<span class="chip">'+esc(L.hierarchy_level)+'</span>'
+      +'<span class="chip">pres '+fx(L.presentability)+'</span>'
+      +L.sources.map(function(x){return '<span class="chip">'+esc(x)+'</span>';}).join('')
+      +'</div></span><span class="sc">'+fx(L.score)+'</span>';
+    n.onclick=function(){ activeLabel=i; focusLabel(L); renderLabels(); renderEvidence(); showTab('evid'); };
+    box.appendChild(n);
+  });
+  pane.innerHTML=''; pane.appendChild(box);
+}
+
+function focusLabel(L){
+  // Jump to the page the label came from and highlight the units behind it, so
+  // the audit panel and the page always agree about what is being discussed.
+  const ids=L.unit_ids||[];
+  const u=(curSeg.units||[]).find(function(x){return x.unit_id===ids[0];});
+  if(u){ curPage=u.page; activeUnit=u.unit_id; }
+  renderPage();
+}
+
+/* ---------- per-source evidence for the selected label ---------- */
+function renderEvidence(){
+  const pane=$('#t-evid'), id=identity();
+  const L=id.labels[activeLabel];
+  if(!L){ pane.innerHTML='<div class="body muted small">\u2014</div>'; return; }
+  let h='<div class="body"><div class="small muted">Evidence for label '+(activeLabel+1)+'</div>'
+    +'<div style="margin:6px 0 12px;font-size:13.5px;font-weight:600">'+esc(L.text)+'</div>';
+
+  const all=L.contributions.slice();
+  const max=Math.max.apply(null,all.map(function(c){return Math.abs(c.contribution);}).concat([0.001]));
+  h+='<table><thead><tr><th>Evidence source</th><th class="num">raw</th><th class="num">norm</th>'
+    +'<th class="num">weight</th><th class="num">score</th><th></th></tr></thead><tbody>';
+  let total=0;
+  all.forEach(function(c){
+    total+=c.contribution;
+    const pct=Math.abs(c.contribution)/max*50;
+    const bar=c.contribution>=0?'<i class="p" style="width:'+pct+'%"></i>'
+                               :'<i class="n" style="width:'+pct+'%"></i>';
+    const off=c.disabled?' <span class="muted small">(off)</span>':'';
+    const raw=(c.raw===null||c.raw===undefined)?'\u2014':fx(c.raw);
+    h+='<tr class="'+(c.contribution<0?'neg':'pos')+'">'
+      +'<td>'+esc(c.source)+off+'</td>'
+      +'<td class="num">'+raw+'</td>'
+      +'<td class="num">'+fx(c.normalised)+'</td>'
+      +'<td class="num">'+fx(c.weight)+'</td>'
+      +'<td class="num c">'+(c.contribution>=0?'+':'')+fx(c.contribution)+'</td>'
+      +'<td><div class="bar">'+bar+'</div></td></tr>';
+  });
+  h+='<tr><td><b>Total</b></td><td class="num"></td><td class="num"></td><td class="num"></td>'
+    +'<td class="num"><b>'+fx(total)+'</b></td><td></td></tr></tbody></table>';
+
+  if(L.presentability_reasons && L.presentability_reasons.length){
+    h+='<div class="small muted" style="margin-top:12px">presentability rules fired:</div><div>'
+      +L.presentability_reasons.map(function(r){
+        return '<span class="sig '+(r.delta>=0?'p':'n')+'">'+esc(r.rule)+' '+(r.delta>=0?'+':'')+r.delta+'</span>';
+      }).join('')+'</div>';
+  }
+  if(L.composition){
+    h+='<div class="small muted" style="margin-top:12px">composed from '+L.composition.parts.length+' units:</div>'
+      +L.composition.parts.map(function(p){return '<div class="small">\u2022 '+esc(p)+'</div>';}).join('')
+      +'<div style="margin-top:5px">'
+      +(L.composition.reasons||[]).map(function(r){return '<span class="sig p">'+esc(r)+'</span>';}).join('')
+      +'</div>';
+  }
+  const t=id.typography||{}, g=id.graph||{}, idf=id.idf||{};
+  h+='<div class="small muted" style="margin-top:14px">body '+fx(t.body_size)+'pt \u00b7 heading sizes ['
+    +((t.heading_sizes||[]).join(', '))+'] \u00b7 graph '+(g.edges||0)+' edges \u00b7 idf <code>'
+    +esc(idf.version||'\u2014')+'</code></div>';
+  pane.innerHTML=h+'</div>';
+}
 
 function renderVersions(){
   // Every number on this screen came from a specific set of contracts. Show
@@ -375,19 +478,20 @@ $('#showboxes').onchange=renderPage; $('#showexcluded').onchange=renderPage;
 function renderLabel(){
   const box=$('#labelout');
   if(!sel||!curSeg){ box.innerHTML='<div class="muted small">No document selected</div>'; return; }
+  const id=identity();
+  const top=id.labels[0];
   const t=curSeg.title||{};
-  const val = t.value ? esc(t.value)
-    : `<span class="none">no label emitted — ${esc(t.confidence||'escalate')}</span>`;
-  box.innerHTML=`
-    <div class="small muted">TITLE · segment ${curSeg.index} (pages ${curSeg.start_page}–${curSeg.end_page})
-      <span class="badge b-${esc(t.confidence||'error')}">${esc(t.confidence||'error')}</span></div>
-    <div class="val">${val}</div>
-    ${t.value?'':`<div class="small muted">top candidate was: “${esc(t.candidate||'—')}”</div>`}
-    <div class="kv">
-      <span>score ${fx(t.score)}</span><span>margin ${fx(t.margin)}</span>
-      <span>${t.excluded_count||0} excluded</span>
-      ${t.flat_typography?'<span title="segment has no usable typographic contrast; layout features damped">flat typography</span>':''}
-    </div>`;
+  const val = top ? esc(top.text) : '<span class="none">no label composed</span>';
+  box.innerHTML='<div class="small muted">IDENTITY \u00b7 segment '+curSeg.index
+    +' (pages '+curSeg.start_page+'\u2013'+curSeg.end_page+') '
+    +'<span class="badge b-'+esc(id.confidence||'error')+'">'+esc(id.confidence||'error')+'</span></div>'
+    +'<div class="val">'+val+'</div>'
+    +'<div class="kv"><span>score '+fx(top&&top.score)+'</span>'
+    +'<span>margin '+fx(id.margin)+'</span>'
+    +'<span>'+(id.candidates||0)+' candidates</span>'
+    +'<span>pres '+fx(top&&top.presentability)+'</span></div>'
+    +'<div class="small muted" style="margin-top:6px">title scorer said: '
+    +(t.value?('\u201c'+esc(t.value)+'\u201d'):('<i>nothing ('+esc(t.confidence||'\u2014')+')</i>'))+'</div>';
 }
 
 /* ---------- why this label ---------- */

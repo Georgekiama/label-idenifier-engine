@@ -233,6 +233,12 @@ python dashboard/server.py          # http://127.0.0.1:5000
 - **Features.** The raw Feature Matrix row, including span provenance.
 - **Granularity policy** is switchable in the header; *Re-run* re-analyses the
   selected document without re-uploading.
+- **Top 3 labels + Evidence tabs.** The Identity Composer's elected labels, then
+  everything that nearly won. Click a label to jump to its page, highlight the
+  units behind it, and see the per-source table: raw score, normalised value,
+  contract weight and signed contribution for each of the six evidence sources,
+  summing to the total. The presentability rules that fired are listed by name,
+  and a composed label shows the exact units it was joined from.
 - **Remove what you have tested.** Hover a document for its **×**, or *Clear all*
   in the panel header. Deleting removes the stored PDF from the temp directory
   as well as the row, so the list on screen and the bytes on disk agree.

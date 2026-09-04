@@ -53,6 +53,7 @@ import segmenter  # noqa: E402
 import unit_assembly  # noqa: E402
 import feature_matrix  # noqa: E402
 import role_title  # noqa: E402
+from identity import composer as identity_composer  # noqa: E402
 from contracts import loader as contracts  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -61,6 +62,9 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 RENDER_ZOOM = 2.0          # 144 dpi: readable without being slow
 MAX_RENDER_PAGES = 400
+# The composer elects 3, but a reviewer auditing WHY needs to see what nearly
+# won. Everything past rank 3 is shown as "also considered".
+DASHBOARD_LABEL_DEPTH = 15
 
 # --- Limits -----------------------------------------------------------------
 #
@@ -222,10 +226,26 @@ def analyse(pdf_path: Path, policy: str = None):
                 "flat_typography": title.get("flat_typography"),
             }
             entry["segment_stats"] = matrix["segment"]
+
+            # Stage 5: the Identity Composer. Deeper than the elected 3 so the
+            # dashboard can show what nearly won and why it lost.
+            ident = identity_composer.compose(units, top_n=DASHBOARD_LABEL_DEPTH)
+            entry["identity"] = {
+                "labels": ident["labels"],
+                "confidence": ident["confidence"],
+                "margin": ident.get("margin"),
+                "candidates": ident.get("candidates"),
+                "suppressed_duplicates": ident.get("suppressed_duplicates", []),
+                "typography": ident.get("typography"),
+                "idf": ident.get("idf"),
+                "graph": ident.get("graph"),
+                "elected": min(3, len(ident["labels"])),
+            }
         except Exception as e:
             entry["error"] = f"{type(e).__name__}: {e}"
             entry["units"] = []
             entry["title"] = {"value": None, "confidence": "error"}
+            entry["identity"] = {"labels": [], "confidence": "error", "elected": 0}
         segments.append(entry)
 
     return {
@@ -244,6 +264,7 @@ def analyse(pdf_path: Path, policy: str = None):
             "assembly": unit_assembly.ASSEMBLY_VERSION,
             "feature_set": feature_matrix.FEATURE_SET_VERSION,
             "role": role_title.ROLE_VERSION,
+            "composer": identity_composer.COMPOSER_VERSION,
             "contracts": contracts.versions(),
         },
     }
