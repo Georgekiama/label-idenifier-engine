@@ -1,0 +1,57 @@
+{
+  "full": {
+    "top1_accuracy": 0.2857,
+    "top3_accuracy": 0.3377
+  },
+  "ablation": {
+    "typography": {
+      "top1": 0.2208,
+      "delta_top1": -0.0649,
+      "top3": 0.2727,
+      "delta_top3": -0.065,
+      "verdict": "load-bearing"
+    },
+    "presentability": {
+      "top1": 0.2727,
+      "delta_top1": -0.013,
+      "top3": 0.3766,
+      "delta_top3": 0.0389,
+      "verdict": "no measurable effect"
+    },
+    "position": {
+      "top1": 0.2987,
+      "delta_top1": 0.013,
+      "top3": 0.3247,
+      "delta_top3": -0.013,
+      "verdict": "no measurable effect"
+    },
+    "bm25": {
+      "top1": 0.2468,
+      "delta_top1": -0.0389,
+      "top3": 0.3247,
+      "delta_top3": -0.013,
+      "verdict": "load-bearing"
+    },
+    "textrank": {
+      "top1": 0.2727,
+      "delta_top1": -0.013,
+      "top3": 0.3247,
+      "delta_top3": -0.013,
+      "verdict": "no measurable effect"
+    },
+    "rake": {
+      "top1": 0.2597,
+      "delta_top1": -0.026,
+      "top3": 0.3377,
+      "delta_top3": 0.0,
+      "verdict": "load-bearing"
+    },
+    "graph_bonus": {
+      "top1": 0.2857,
+      "delta_top1": 0.0,
+      "top3": 0.3377,
+      "delta_top3": 0.0,
+      "verdict": "no measurable effect"
+    }
+  }
+}

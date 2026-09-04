@@ -125,6 +125,87 @@ Coverage is biased toward easy documents: 23% of the identified legal documents
 and 0% of documents with scanned first pages carry usable metadata. Hand-label
 the gap, not the corpus.
 
+## Stage 5: Identity Composer
+
+Given pages 1-2, produce the top presentable binder labels using deterministic
+algorithms only. No AI, no vision models, no LLMs, no embeddings. The engine
+never invents words - it extracts, ranks, joins, normalises and composes text
+that already exists on the page. A test enforces exactly that.
+
+Six independent evidence sources, fused by contract weights:
+
+| Source | Contributes |
+|---|---|
+| `typography` | hierarchy level by character mass, not raw size |
+| `presentability` | fitness for a binder tab, independent of topic |
+| `bm25` | corpus-rarity relevance against a **frozen** IDF table |
+| `rake` | connector-aware multi-word phrase extraction |
+| `textrank` | classical PageRank, fixed iterations |
+| `phrase graph` | reconstructs headings split across units |
+
+```
+python tools/build_idf.py --corpus "<pdfs>"            # one-off, frozen artefact
+python tools/evaluate_labels.py --corpus "<pdfs>"
+python tools/evaluate_labels.py --corpus "<pdfs>" --ablate
+```
+
+### Two deviations from the brief, both forced by measurement
+
+**RAKE keeps interior connectors.** Classic RAKE splits on every stopword, so
+`Motion to Compel` becomes `Motion` + `Compel`. 30% of phrase-like units on page
+1 carry an interior stopword, including `TREATY WITH THE TRIBES OF MIDDLE
+OREGON`. Splitting is now on punctuation and *hard* stopwords only.
+
+**BM25 has no query.** BM25 ranks documents against a query; there is neither
+here. The candidate phrase is treated as the query and the document as the
+corpus entry, so the score asks how well a phrase represents its document given
+corpus-wide term rarity. IDF is corpus state, so the table is frozen and
+versioned like any other contract.
+
+### Measured, with the ablation
+
+77 harvested titles, match at token-F1 >= 0.70:
+
+| metric | value |
+|---|---|
+| top1 accuracy | 0.286 |
+| top3 accuracy | 0.338 |
+| binder-shaped (2-12 words) | **0.935** |
+| mean presentability | 0.863 |
+
+Disabling one source at a time:
+
+| disabled | top1 delta | verdict |
+|---|---|---|
+| typography | −0.065 | load-bearing |
+| bm25 | −0.039 | load-bearing |
+| rake | −0.026 | load-bearing |
+| presentability | −0.013 | neutral on accuracy, decisive for shape |
+| textrank | −0.013 | no measurable effect |
+| position | +0.013 | no measurable effect |
+| graph_bonus | +0.000 | no measurable effect |
+
+**Three sources earn their weight; three do not, on this corpus.** They are kept
+at low weight rather than deleted, for a stated reason: the phrase graph targets
+headings split across lines and the benchmark is 198 unrelated single documents,
+so it supplies only 3 of 77 winners here. The same caveat applies to IDF - built
+over one firm's intake, with the same letterhead on every file, it would be far
+stronger than it is over 198 unrelated issuers.
+
+### Accuracy and presentability are different questions
+
+Ground-truth titles run to a median of 7 words but **39% exceed 8 words** and
+30% exceed 72 characters, up to 26 words. So reproducing the metadata title and
+producing a binder label are not the same objective, and the evaluator reports
+both axes. An early presentability band of 3-8 words measured as actively
+*harmful* (+0.052 top1 when disabled) because it fought that tail; widened to
+3-12 against the observed distribution, top1 rose 0.221 to 0.286 while 93.5% of
+labels stayed binder-shaped.
+
+Weight configurations beyond that are statistically indistinguishable on 77
+documents - one document is 0.013 - so no further tuning is justified until the
+hand-labelled set exists.
+
 ## Audit dashboard
 
 A local tool for examining and fine-tuning the engine. Upload PDFs, see the

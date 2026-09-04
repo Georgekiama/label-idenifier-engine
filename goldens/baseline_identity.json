@@ -1,0 +1,6 @@
+{
+  "top1_accuracy": 0.2857,
+  "top3_accuracy": 0.3377,
+  "documents": 77,
+  "composer_version": "1.0.0"
+}
